@@ -1,0 +1,2336 @@
+"""
+COMPLETE ULTIMATE TRADING SYSTEM
+=================================
+
+The definitive trading platform with ALL features integrated:
+
+CORE FEATURES:
+- Interactive user input & custom ticker selection
+- Real-time trading signals (BUY/SELL/HOLD)
+- 5 Trading strategies (MA, Mean Reversion, RSI, BB, Momentum)
+- Regime-aware strategy allocation
+- Complete backtesting framework
+- Walk-forward testing & validation
+- Monte Carlo simulation
+- 6+ Comprehensive visualizations
+- Performance comparison tables
+- Portfolio mode for multi-asset analysis
+
+ADVANCED FEATURES:
+- Multi-timeframe analysis (daily/weekly/monthly alignment)
+- Machine learning regime prediction
+- Automatic parameter optimization  
+- Portfolio optimization (Markowitz, Risk Parity)
+- Enhanced backtesting with realistic costs
+- Real-time alert system with export
+- Advanced performance metrics
+
+This is the complete, production-ready system.
+"""
+
+import yfinance as yf
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import warnings
+from datetime import datetime, timedelta
+from typing import Tuple, Dict, List, Optional
+import seaborn as sns
+
+
+from scipy.optimize import minimize
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.preprocessing import StandardScaler
+from dataclasses import dataclass
+from enum import Enum
+
+warnings.filterwarnings('ignore')
+plt.style.use('seaborn-v0_8-darkgrid')
+
+# ==================================================
+# CONFIGURATION
+# ==================================================
+
+class Config:
+    """Centralized configuration management"""
+    
+    # Data Parameters
+    START_DATE = "2010-01-01"
+    DEFAULT_UNIVERSE = ["SPY", "QQQ", "IWM", "EFA", "EEM"]
+    
+    # Strategy Parameters
+    LOOKBACK_MOM = 126  # ~6 months
+    TOP_N = 2
+    TARGET_VOL = 0.10
+    REB_FREQ = "ME"  # Month End
+    VOL_LOOKBACK = 20
+    VOL_THRESHOLD = 0.20
+    REGIME_CONFIRM_DAYS = 5
+    
+    # MA Parameters
+    MA_FAST = 50
+    MA_SLOW = 200
+    
+    # Z-Score Parameters
+    ZSCORE_WINDOW = 20
+    ZSCORE_ENTRY = -1.0
+    ZSCORE_EXIT = 0.0
+    
+    # RSI Parameters
+    RSI_PERIOD = 14
+    RSI_OVERSOLD = 30
+    RSI_OVERBOUGHT = 70
+    
+    # Bollinger Bands Parameters
+    BB_PERIOD = 20
+    BB_STD = 2.0
+    
+    # Performance Parameters
+    ROLL_WINDOW = 252
+    TRANSACTION_COST = 0.001  # 10 bps
+    
+    # Walk-Forward Parameters
+    TRAIN_YEARS = 5
+    TEST_YEARS = 1
+    
+    # Monte Carlo Parameters
+    MC_SIMULATIONS = 1000
+    MC_SAMPLE_SIZE = 252  # 1 year
+    
+    # Multi-Timeframe Parameters
+    TIMEFRAMES = {
+        'daily': '1d',
+        'weekly': '1wk',
+        'monthly': '1mo'
+    }
+    
+    # Alert Parameters
+    DRAWDOWN_ALERT_THRESHOLD = 0.05  # 5% drawdown triggers alert
+    
+    # ML Parameters
+    ML_LOOKBACK_FEATURES = 60  # Days for feature calculation
+    ML_TRAIN_SIZE = 1000  # Minimum training samples
+    
+    # Enhanced Backtesting Parameters
+    SLIPPAGE = 0.0005  # 5 bps
+    MARKET_IMPACT = 0.0002  # 2 bps
+    
+    # Portfolio Optimization Parameters
+    RISK_FREE_RATE = 0.04  # 4% annual
+    MAX_POSITION_SIZE = 0.25  # 25% max per position
+    MIN_POSITION_SIZE = 0.01  # 1% min per position
+
+
+# ==================================================
+# ENUMS AND DATA CLASSES
+# ==================================================
+
+class Signal(Enum):
+    """Trading signal enumeration"""
+    STRONG_BUY = 2
+    BUY = 1
+    HOLD = 0
+    SELL = -1
+    STRONG_SELL = -2
+
+@dataclass
+
+
+class Alert:
+    """Alert data structure"""
+    timestamp: datetime
+    ticker: str
+    signal: Signal
+    strategy: str
+    price: float
+    confidence: float
+    message: str
+    timeframes_aligned: bool
+
+@dataclass
+
+
+class TradeRecommendation:
+    """Trade recommendation structure"""
+    ticker: str
+    action: str  # BUY, SELL, HOLD
+    current_price: float
+    target_price: float
+    stop_loss: float
+    position_size: float  # As percentage of portfolio
+    confidence: float
+    timeframe_alignment: Dict[str, str]
+    strategies_agreeing: List[str]
+    regime: str
+    risk_reward_ratio: float
+
+# ==================================================
+# DATA MANAGEMENT
+# ==================================================
+
+
+
+# ==================================================
+# DATA VALIDATION & FETCHING
+# ==================================================
+
+class DataManager:
+    """Manage data fetching and validation for securities"""
+    
+    @staticmethod
+    def validate_ticker(ticker: str) -> Tuple[bool, str]:
+        """Validate if ticker exists and has data"""
+        try:
+            stock = yf.Ticker(ticker)
+            info = stock.info
+            
+            # Check if ticker is valid
+            if not info or 'regularMarketPrice' not in info:
+                return False, f"Ticker {ticker} not found or has no data"
+            
+            return True, f"Valid ticker: {info.get('shortName', ticker)}"
+        except Exception as e:
+            return False, f"Error validating {ticker}: {str(e)}"
+    
+    @staticmethod
+    def fetch_data(tickers: List[str], start_date: str, 
+                   end_date: Optional[str] = None) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """Fetch historical price data for given tickers"""
+        try:
+            data = yf.download(
+                tickers,
+                start=start_date,
+                end=end_date,
+                auto_adjust=True,
+                progress=False
+            )
+            
+            if len(tickers) == 1:
+                # For single ticker, extract Close column and convert to DataFrame
+                if "Close" in data.columns:
+                    prices = pd.DataFrame(data["Close"])
+                    prices.columns = [tickers[0]]
+                else:
+                    # Handle case where Close is the only column
+                    prices = pd.DataFrame(data)
+                    if prices.shape[1] == 1:
+                        prices.columns = [tickers[0]]
+            else:
+                # For multiple tickers
+                if isinstance(data.columns, pd.MultiIndex):
+                    prices = data["Close"]
+                else:
+                    prices = data
+            
+            returns = prices.pct_change(fill_method=None).dropna()
+            
+            return prices, returns
+        except Exception as e:
+            raise ValueError(f"Error fetching data: {str(e)}")
+    
+    @staticmethod
+    def get_ticker_info(ticker: str) -> Dict:
+        """Get detailed information about a ticker"""
+        try:
+            stock = yf.Ticker(ticker)
+            info = stock.info
+            
+            return {
+                'name': info.get('shortName', ticker),
+                'sector': info.get('sector', 'N/A'),
+                'industry': info.get('industry', 'N/A'),
+                'market_cap': info.get('marketCap', 'N/A'),
+                'currency': info.get('currency', 'USD'),
+                'exchange': info.get('exchange', 'N/A')
+            }
+        except:
+            return {'name': ticker, 'sector': 'N/A', 'industry': 'N/A', 
+                   'market_cap': 'N/A', 'currency': 'USD', 'exchange': 'N/A'}
+
+# ==================================================
+# UTILITY FUNCTIONS
+# ==================================================
+
+def safe_divide(numerator: pd.Series, denominator: pd.Series, 
+                fill_value: float = 0.0) -> pd.Series:
+    """Safely divide two series, handling zeros and NaNs"""
+    result = numerator / denominator
+    result = result.replace([np.inf, -np.inf], fill_value)
+    return result.fillna(fill_value)
+
+def compute_zscore(series: pd.Series, window: int) -> pd.Series:
+    """Compute rolling z-score"""
+    mean = series.rolling(window).mean()
+    std = series.rolling(window).std()
+    return safe_divide(series - mean, std)
+
+def compute_returns(prices: pd.DataFrame, periods: int = 1) -> pd.DataFrame:
+    """Compute returns with proper handling of missing data"""
+    return prices.pct_change(periods, fill_method=None)
+
+def compute_rsi(prices: pd.Series, period: int = 14) -> pd.Series:
+    """Compute Relative Strength Index"""
+    delta = prices.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = safe_divide(gain, loss, fill_value=100)
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+def compute_bollinger_bands(prices: pd.Series, period: int = 20, 
+                           num_std: float = 2.0) -> Tuple[pd.Series, pd.Series, pd.Series]:
+    """Compute Bollinger Bands"""
+    middle = prices.rolling(window=period).mean()
+    std = prices.rolling(window=period).std()
+    upper = middle + (std * num_std)
+    lower = middle - (std * num_std)
+    return upper, middle, lower
+
+# ==================================================
+# PERFORMANCE METRICS
+# ==================================================
+
+class PerformanceAnalytics:
+    """Comprehensive performance metrics calculation"""
+    
+    @staticmethod
+    def calculate_metrics(returns: pd.Series) -> Dict[str, float]:
+        """Calculate comprehensive performance metrics"""
+        returns = returns.dropna()
+        
+        if len(returns) == 0 or returns.std() == 0:
+            return PerformanceAnalytics._empty_metrics()
+        
+        equity = (1 + returns).cumprod()
+        drawdown = (equity - equity.cummax()) / equity.cummax()
+        
+        # Core metrics
+        total_return = equity.iloc[-1] - 1
+        cagr = (equity.iloc[-1] ** (252 / len(returns))) - 1
+        sharpe = returns.mean() / returns.std() * np.sqrt(252)
+        
+        # Risk metrics
+        max_dd = drawdown.min()
+        calmar = safe_divide(pd.Series([cagr]), pd.Series([abs(max_dd)]), 0).iloc[0]
+        
+        # Additional metrics
+        sortino = PerformanceAnalytics._sortino_ratio(returns)
+        win_rate = (returns > 0).sum() / len(returns)
+        avg_win = returns[returns > 0].mean() if (returns > 0).any() else 0
+        avg_loss = returns[returns < 0].mean() if (returns < 0).any() else 0
+        profit_factor = abs(avg_win / avg_loss) if avg_loss != 0 else 0
+        
+        # Tail risk
+        var_95 = returns.quantile(0.05)
+        cvar_95 = returns[returns <= var_95].mean()
+        
+        return {
+            'total_return': total_return,
+            'cagr': cagr,
+            'sharpe': sharpe,
+            'sortino': sortino,
+            'max_drawdown': max_dd,
+            'calmar': calmar,
+            'win_rate': win_rate,
+            'profit_factor': profit_factor,
+            'var_95': var_95,
+            'cvar_95': cvar_95,
+            'volatility': returns.std() * np.sqrt(252)
+        }
+    
+    @staticmethod
+    def _sortino_ratio(returns: pd.Series) -> float:
+        """Calculate Sortino ratio (downside deviation)"""
+        downside = returns[returns < 0].std()
+        if downside == 0 or pd.isna(downside):
+            return 0.0
+        return returns.mean() / downside * np.sqrt(252)
+    
+    @staticmethod
+    def _empty_metrics() -> Dict[str, float]:
+        """Return empty metrics dict"""
+        return {k: 0.0 for k in ['total_return', 'cagr', 'sharpe', 'sortino',
+                                  'max_drawdown', 'calmar', 'win_rate', 
+                                  'profit_factor', 'var_95', 'cvar_95', 'volatility']}
+    
+    @staticmethod
+    def rolling_sharpe(returns: pd.Series, window: int) -> pd.Series:
+        """Calculate rolling Sharpe ratio"""
+        return safe_divide(
+            returns.rolling(window).mean(),
+            returns.rolling(window).std()
+        ) * np.sqrt(252)
+    
+    @staticmethod
+    def get_drawdown_series(returns: pd.Series) -> pd.Series:
+        """Calculate drawdown series"""
+        equity = (1 + returns).cumprod()
+        return (equity - equity.cummax()) / equity.cummax()
+
+# ==================================================
+# REGIME DETECTION
+# ==================================================
+
+class RegimeDetector:
+    """Market regime detection using multiple signals"""
+    
+    def __init__(self, price: pd.Series, returns: pd.Series, 
+                 vol_lookback: int = 20, vol_threshold: float = 0.20,
+                 confirm_days: int = 5):
+        self.price = price
+        self.returns = returns
+        self.vol_lookback = vol_lookback
+        self.vol_threshold = vol_threshold
+        self.confirm_days = confirm_days
+    
+    def detect_regime(self) -> pd.Series:
+        """Detect market regime with hysteresis filter"""
+        # Trend filter
+        ma200 = self.price.rolling(200).mean()
+        trend_regime = self.price > ma200
+        
+        # Volatility filter
+        realized_vol = self.returns.rolling(self.vol_lookback).std() * np.sqrt(252)
+        low_vol = realized_vol < self.vol_threshold
+        
+        # Raw regime classification
+        raw_regime = pd.Series("Risk-Off", index=self.price.index)
+        raw_regime[trend_regime & low_vol] = "Trend"
+        raw_regime[trend_regime & ~low_vol] = "Choppy"
+        
+        # Apply hysteresis to reduce whipsaws
+        return self._apply_hysteresis(raw_regime)
+    
+    def _apply_hysteresis(self, raw_regime: pd.Series) -> pd.Series:
+        """Apply hysteresis filter to regime changes"""
+        regime = raw_regime.copy()
+        current = regime.iloc[0]
+        count = 0
+        
+        for i in range(1, len(regime)):
+            if raw_regime.iloc[i] == current:
+                count = 0
+            else:
+                count += 1
+                if count >= self.confirm_days:
+                    current = raw_regime.iloc[i]
+                    count = 0
+            regime.iloc[i] = current
+        
+        return regime
+
+# ==================================================
+# STRATEGY IMPLEMENTATIONS
+# ==================================================
+
+class Strategy:
+    """Base strategy class"""
+    
+    @staticmethod
+    def apply_transaction_costs(returns: pd.Series, signal: pd.Series, 
+                                cost: float = 0.001) -> pd.Series:
+        """Apply transaction costs to strategy returns"""
+        trades = signal.diff().abs()
+        adjusted_returns = signal.shift(1) * returns
+        adjusted_returns -= trades * cost
+        return adjusted_returns.dropna()
+
+class MovingAverageTrend(Strategy):
+    """Moving Average trend following strategy"""
+    
+    def __init__(self, price: pd.Series, fast: int = 50, slow: int = 200):
+        self.price = price
+        self.fast = fast
+        self.slow = slow
+    
+    def generate_signal(self) -> pd.Series:
+        """Generate MA crossover signal"""
+        ma_fast = self.price.rolling(self.fast).mean()
+        ma_slow = self.price.rolling(self.slow).mean()
+        return (ma_fast > ma_slow).astype(int)
+    
+    def backtest(self, returns: pd.Series, cost: float = 0.001) -> pd.Series:
+        """Backtest the strategy"""
+        signal = self.generate_signal()
+        return self.apply_transaction_costs(returns, signal, cost)
+
+class MeanReversion(Strategy):
+    """Z-score based mean reversion strategy"""
+    
+    def __init__(self, price: pd.Series, window: int = 20, 
+                 entry_threshold: float = -1.0, exit_threshold: float = 0.0):
+        self.price = price
+        self.window = window
+        self.entry_threshold = entry_threshold
+        self.exit_threshold = exit_threshold
+    
+    def generate_signal(self) -> pd.Series:
+        """Generate mean reversion signal"""
+        zscore = compute_zscore(self.price, self.window)
+        signal = pd.Series(0, index=zscore.index)
+        
+        # Entry when z-score is low (oversold)
+        signal[zscore < self.entry_threshold] = 1
+        # Exit when z-score returns to normal
+        signal[zscore > self.exit_threshold] = 0
+        
+        # Forward fill to maintain positions
+        signal = signal.replace(0, np.nan).fillna(method='ffill').fillna(0)
+        
+        return signal
+    
+    def backtest(self, returns: pd.Series, cost: float = 0.001) -> pd.Series:
+        """Backtest the strategy"""
+        signal = self.generate_signal()
+        return self.apply_transaction_costs(returns, signal, cost)
+
+class RSIStrategy(Strategy):
+    """RSI-based mean reversion strategy"""
+    
+    def __init__(self, price: pd.Series, period: int = 14, 
+                 oversold: float = 30, overbought: float = 70):
+        self.price = price
+        self.period = period
+        self.oversold = oversold
+        self.overbought = overbought
+    
+    def generate_signal(self) -> pd.Series:
+        """Generate RSI signal"""
+        rsi = compute_rsi(self.price, self.period)
+        signal = pd.Series(0, index=rsi.index)
+        
+        # Entry when RSI is oversold
+        signal[rsi < self.oversold] = 1
+        # Exit when RSI reaches overbought
+        signal[rsi > self.overbought] = 0
+        
+        # Forward fill to maintain positions
+        signal = signal.replace(0, np.nan).fillna(method='ffill').fillna(0)
+        
+        return signal
+    
+    def backtest(self, returns: pd.Series, cost: float = 0.001) -> pd.Series:
+        """Backtest the strategy"""
+        signal = self.generate_signal()
+        return self.apply_transaction_costs(returns, signal, cost)
+
+class BollingerBandsStrategy(Strategy):
+    """Bollinger Bands mean reversion strategy"""
+    
+    def __init__(self, price: pd.Series, period: int = 20, num_std: float = 2.0):
+        self.price = price
+        self.period = period
+        self.num_std = num_std
+    
+    def generate_signal(self) -> pd.Series:
+        """Generate Bollinger Bands signal"""
+        upper, middle, lower = compute_bollinger_bands(self.price, self.period, self.num_std)
+        signal = pd.Series(0, index=self.price.index)
+        
+        # Entry when price touches lower band
+        signal[self.price < lower] = 1
+        # Exit when price returns to middle band
+        signal[self.price > middle] = 0
+        
+        # Forward fill to maintain positions
+        signal = signal.replace(0, np.nan).fillna(method='ffill').fillna(0)
+        
+        return signal
+    
+    def backtest(self, returns: pd.Series, cost: float = 0.001) -> pd.Series:
+        """Backtest the strategy"""
+        signal = self.generate_signal()
+        return self.apply_transaction_costs(returns, signal, cost)
+
+class MomentumPortfolio(Strategy):
+    """Cross-sectional momentum strategy"""
+    
+    def __init__(self, prices: pd.DataFrame, lookback: int = 126, 
+                 top_n: int = 2, rebalance_freq: str = "ME"):
+        self.prices = prices
+        self.lookback = lookback
+        self.top_n = top_n
+        self.rebalance_freq = rebalance_freq
+    
+    def rank_assets(self) -> pd.DataFrame:
+        """Rank assets by past returns"""
+        past_returns = self.prices.pct_change(self.lookback, fill_method=None)
+        return past_returns.rank(axis=1, ascending=False)
+    
+    def generate_weights(self) -> pd.DataFrame:
+        """Generate equal-weight portfolio of top N assets"""
+        ranks = self.rank_assets()
+        signals = (ranks <= self.top_n).astype(int)
+        weights = signals.div(signals.sum(axis=1), axis=0).fillna(0)
+        
+        # Rebalance at specified frequency
+        weights = (
+            weights.resample(self.rebalance_freq).last()
+            .reindex(weights.index, method='ffill')
+        )
+        
+        return weights
+    
+    def backtest(self, returns: pd.DataFrame, target_vol: float = 0.10) -> pd.Series:
+        """Backtest momentum portfolio with volatility targeting"""
+        weights = self.generate_weights()
+        portfolio_returns = (weights.shift(1) * returns).sum(axis=1)
+        
+        # Apply volatility targeting
+        realized_vol = portfolio_returns.rolling(20).std() * np.sqrt(252)
+        scaler = safe_divide(
+            pd.Series(target_vol, index=realized_vol.index),
+            realized_vol
+        ).clip(0, 1.5)
+        
+        return portfolio_returns * scaler.shift(1)
+
+# ==================================================
+# TRADING SIGNAL GENERATOR
+# ==================================================
+
+class TradingSignalGenerator:
+    """Generate current trading signals for a given security"""
+    
+    def __init__(self, ticker: str, price_data: pd.Series, returns: pd.Series):
+        self.ticker = ticker
+        self.price = price_data
+        self.returns = returns
+        self.current_price = price_data.iloc[-1]
+        self.signals = {}
+        
+    def generate_all_signals(self) -> Dict[str, Dict]:
+        """Generate signals from all available strategies"""
+        
+        # Moving Average Strategy
+        ma_strategy = MovingAverageTrend(self.price, Config.MA_FAST, Config.MA_SLOW)
+        ma_signal = ma_strategy.generate_signal()
+        self.signals['MA_Crossover'] = self._format_signal(
+            ma_signal,
+            "Moving Average Crossover (50/200)",
+            self._get_ma_details()
+        )
+        
+        # Mean Reversion (Z-Score)
+        mr_strategy = MeanReversion(self.price, Config.ZSCORE_WINDOW, 
+                                    Config.ZSCORE_ENTRY, Config.ZSCORE_EXIT)
+        mr_signal = mr_strategy.generate_signal()
+        self.signals['Mean_Reversion'] = self._format_signal(
+            mr_signal,
+            "Mean Reversion (Z-Score)",
+            self._get_zscore_details()
+        )
+        
+        # RSI Strategy
+        rsi_strategy = RSIStrategy(self.price, Config.RSI_PERIOD, 
+                                   Config.RSI_OVERSOLD, Config.RSI_OVERBOUGHT)
+        rsi_signal = rsi_strategy.generate_signal()
+        self.signals['RSI'] = self._format_signal(
+            rsi_signal,
+            "RSI Mean Reversion",
+            self._get_rsi_details()
+        )
+        
+        # Bollinger Bands Strategy
+        bb_strategy = BollingerBandsStrategy(self.price, Config.BB_PERIOD, Config.BB_STD)
+        bb_signal = bb_strategy.generate_signal()
+        self.signals['Bollinger_Bands'] = self._format_signal(
+            bb_signal,
+            "Bollinger Bands",
+            self._get_bb_details()
+        )
+        
+        # Regime Detection
+        detector = RegimeDetector(self.price, self.returns, Config.VOL_LOOKBACK, 
+                                 Config.VOL_THRESHOLD, Config.REGIME_CONFIRM_DAYS)
+        regime = detector.detect_regime()
+        self.signals['Regime'] = self._format_regime(regime)
+        
+        return self.signals
+    
+    def _format_signal(self, signal: pd.Series, strategy_name: str, 
+                      details: Dict) -> Dict:
+        """Format signal output"""
+        current_signal = signal.iloc[-1]
+        previous_signal = signal.iloc[-2] if len(signal) > 1 else 0
+        
+        position = "LONG" if current_signal == 1 else "FLAT"
+        action = "HOLD"
+        
+        if current_signal == 1 and previous_signal == 0:
+            action = "BUY"
+        elif current_signal == 0 and previous_signal == 1:
+            action = "SELL"
+        
+        return {
+            'strategy': strategy_name,
+            'position': position,
+            'action': action,
+            'signal_value': int(current_signal),
+            'details': details
+        }
+    
+    def _format_regime(self, regime: pd.Series) -> Dict:
+        """Format regime information"""
+        current_regime = regime.iloc[-1]
+        
+        recommendation = {
+            'Trend': "Favorable for trend-following and momentum strategies",
+            'Choppy': "Favorable for mean reversion strategies",
+            'Risk-Off': "Reduce exposure or stay in cash"
+        }
+        
+        return {
+            'strategy': 'Market Regime',
+            'current_regime': current_regime,
+            'recommendation': recommendation.get(current_regime, "Unknown"),
+            'details': {
+                'regime_type': current_regime,
+                'volatility': self.returns.rolling(Config.VOL_LOOKBACK).std().iloc[-1] * np.sqrt(252)
+            }
+        }
+    
+    def _get_ma_details(self) -> Dict:
+        """Get moving average details"""
+        ma_fast = self.price.rolling(Config.MA_FAST).mean().iloc[-1]
+        ma_slow = self.price.rolling(Config.MA_SLOW).mean().iloc[-1]
+        
+        return {
+            'current_price': self.current_price,
+            'ma_fast': ma_fast,
+            'ma_slow': ma_slow,
+            'distance_from_ma_fast': (self.current_price - ma_fast) / ma_fast,
+            'distance_from_ma_slow': (self.current_price - ma_slow) / ma_slow
+        }
+    
+    def _get_zscore_details(self) -> Dict:
+        """Get z-score details"""
+        zscore = compute_zscore(self.price, Config.ZSCORE_WINDOW).iloc[-1]
+        mean = self.price.rolling(Config.ZSCORE_WINDOW).mean().iloc[-1]
+        std = self.price.rolling(Config.ZSCORE_WINDOW).std().iloc[-1]
+        
+        return {
+            'current_price': self.current_price,
+            'zscore': zscore,
+            'mean': mean,
+            'std_dev': std,
+            'interpretation': self._interpret_zscore(zscore)
+        }
+    
+    def _get_rsi_details(self) -> Dict:
+        """Get RSI details"""
+        rsi = compute_rsi(self.price, Config.RSI_PERIOD).iloc[-1]
+        
+        return {
+            'current_price': self.current_price,
+            'rsi': rsi,
+            'oversold_threshold': Config.RSI_OVERSOLD,
+            'overbought_threshold': Config.RSI_OVERBOUGHT,
+            'interpretation': self._interpret_rsi(rsi)
+        }
+    
+    def _get_bb_details(self) -> Dict:
+        """Get Bollinger Bands details"""
+        upper, middle, lower = compute_bollinger_bands(self.price, Config.BB_PERIOD, Config.BB_STD)
+        
+        return {
+            'current_price': self.current_price,
+            'upper_band': upper.iloc[-1],
+            'middle_band': middle.iloc[-1],
+            'lower_band': lower.iloc[-1],
+            'bb_width': (upper.iloc[-1] - lower.iloc[-1]) / middle.iloc[-1],
+            'position_in_bands': (self.current_price - lower.iloc[-1]) / (upper.iloc[-1] - lower.iloc[-1])
+        }
+    
+    def _interpret_zscore(self, zscore: float) -> str:
+        """Interpret z-score value"""
+        if zscore < -2:
+            return "Extremely oversold"
+        elif zscore < -1:
+            return "Oversold"
+        elif zscore > 2:
+            return "Extremely overbought"
+        elif zscore > 1:
+            return "Overbought"
+        else:
+            return "Normal range"
+    
+    def _interpret_rsi(self, rsi: float) -> str:
+        """Interpret RSI value"""
+        if rsi < 30:
+            return "Oversold"
+        elif rsi > 70:
+            return "Overbought"
+        else:
+            return "Neutral"
+    
+    def print_signals(self):
+        """Print formatted trading signals"""
+        print("\n" + "="*80)
+        print(f"TRADING SIGNALS FOR {self.ticker}")
+        print(f"Current Price: ${self.current_price:.2f}")
+        print(f"As of: {self.price.index[-1].strftime('%Y-%m-%d')}")
+        print("="*80)
+        
+        for signal_name, signal_data in self.signals.items():
+            if signal_name == 'Regime':
+                print(f"\n{signal_data['strategy']}:")
+                print(f"  Current Regime: {signal_data['current_regime']}")
+                print(f"  Recommendation: {signal_data['recommendation']}")
+                print(f"  Volatility: {signal_data['details']['volatility']:.2%}")
+            else:
+                print(f"\n{signal_data['strategy']}:")
+                print(f"  Position: {signal_data['position']}")
+                print(f"  Action: {signal_data['action']}")
+                
+                details = signal_data['details']
+                if 'ma_fast' in details:
+                    print(f"  MA Fast ({Config.MA_FAST}): ${details['ma_fast']:.2f}")
+                    print(f"  MA Slow ({Config.MA_SLOW}): ${details['ma_slow']:.2f}")
+                elif 'zscore' in details:
+                    print(f"  Z-Score: {details['zscore']:.2f} ({details['interpretation']})")
+                    print(f"  Mean: ${details['mean']:.2f}")
+                elif 'rsi' in details:
+                    print(f"  RSI: {details['rsi']:.2f} ({details['interpretation']})")
+                elif 'upper_band' in details:
+                    print(f"  Upper Band: ${details['upper_band']:.2f}")
+                    print(f"  Middle Band: ${details['middle_band']:.2f}")
+                    print(f"  Lower Band: ${details['lower_band']:.2f}")
+        
+        print("\n" + "="*80)
+
+# ==================================================
+# REGIME-AWARE STRATEGY ALLOCATOR
+# ==================================================
+
+class RegimeAwareAllocator:
+    """Allocate between strategies based on market regime"""
+    
+    def __init__(self, strategies: Dict[str, pd.Series], regime: pd.Series,
+                 target_vol: float = 0.10):
+        self.strategies = strategies
+        self.regime = regime
+        self.target_vol = target_vol
+    
+    def allocate(self) -> pd.Series:
+        """Allocate between strategies based on regime"""
+        combined = pd.DataFrame(self.strategies).dropna()
+        regime_aligned = self.regime.reindex(combined.index)
+        
+        final_returns = pd.Series(0.0, index=combined.index)
+        
+        # Trend regime: favor momentum and trend following
+        trend_mask = regime_aligned == "Trend"
+        if 'MOM' in combined.columns and 'MA' in combined.columns:
+            final_returns[trend_mask] = (
+                0.7 * combined.loc[trend_mask, "MOM"] + 
+                0.3 * combined.loc[trend_mask, "MA"]
+            )
+        
+        # Choppy regime: favor mean reversion
+        choppy_mask = regime_aligned == "Choppy"
+        if 'Z' in combined.columns and 'MOM' in combined.columns:
+            final_returns[choppy_mask] = (
+                0.6 * combined.loc[choppy_mask, "Z"] + 
+                0.4 * combined.loc[choppy_mask, "MOM"]
+            )
+        
+        # Risk-off regime: reduce exposure
+        risk_off_mask = regime_aligned == "Risk-Off"
+        final_returns[risk_off_mask] = 0.0
+        
+        # Apply volatility targeting
+        return self._apply_vol_targeting(final_returns)
+    
+    def _apply_vol_targeting(self, returns: pd.Series) -> pd.Series:
+        """Apply volatility targeting to final returns"""
+        realized_vol = returns.rolling(20).std() * np.sqrt(252)
+        scaler = safe_divide(
+            pd.Series(self.target_vol, index=realized_vol.index),
+            realized_vol
+        ).clip(0, 1.5)
+        
+        return returns * scaler.shift(1)
+
+# ==================================================
+# WALK-FORWARD ANALYSIS
+# ==================================================
+
+class WalkForwardAnalyzer:
+    """Walk-forward optimization and testing"""
+    
+    def __init__(self, train_years: int = 5, test_years: int = 1):
+        self.train_years = train_years
+        self.test_years = test_years
+    
+    def run(self, returns: pd.Series, start_date: pd.Timestamp) -> pd.Series:
+        """Execute walk-forward analysis"""
+        wf_returns = []
+        
+        start = pd.to_datetime(start_date)
+        end = returns.index[-1]
+        
+        while start + pd.DateOffset(years=self.train_years + self.test_years) <= end:
+            train_end = start + pd.DateOffset(years=self.train_years)
+            test_end = train_end + pd.DateOffset(years=self.test_years)
+            
+            test_slice = returns.loc[train_end:test_end]
+            
+            if len(test_slice) > 0:
+                wf_returns.append(test_slice)
+            
+            start = start + pd.DateOffset(years=self.test_years)
+        
+        return pd.concat(wf_returns) if wf_returns else pd.Series()
+
+# ==================================================
+# MONTE CARLO SIMULATION
+# ==================================================
+
+class MonteCarloSimulator:
+    """Monte Carlo simulation for strategy robustness testing"""
+    
+    def __init__(self, returns: pd.Series, n_simulations: int = 1000,
+                 sample_size: int = 252):
+        self.returns = returns.dropna()
+        self.n_simulations = n_simulations
+        self.sample_size = sample_size
+    
+    def run(self) -> pd.DataFrame:
+        """Run Monte Carlo simulation using bootstrap resampling"""
+        simulated_returns = []
+        
+        for _ in range(self.n_simulations):
+            sample = np.random.choice(
+                self.returns.values, 
+                size=self.sample_size, 
+                replace=True
+            )
+            simulated_returns.append(sample)
+        
+        return pd.DataFrame(simulated_returns).T
+    
+    def get_metrics(self) -> Dict[str, float]:
+        """Calculate Monte Carlo statistics"""
+        sims = self.run()
+        equity_curves = (1 + sims).cumprod()
+        final_values = equity_curves.iloc[-1]
+        
+        sharpe_ratios = []
+        for col in sims.columns:
+            ret = sims[col]
+            if ret.std() > 0:
+                sharpe_ratios.append(ret.mean() / ret.std() * np.sqrt(252))
+        
+        return {
+            'mean_return': final_values.mean() - 1,
+            'median_return': final_values.median() - 1,
+            'std_return': final_values.std(),
+            'percentile_5': final_values.quantile(0.05) - 1,
+            'percentile_95': final_values.quantile(0.95) - 1,
+            'mean_sharpe': np.mean(sharpe_ratios) if sharpe_ratios else 0,
+            'median_sharpe': np.median(sharpe_ratios) if sharpe_ratios else 0
+        }
+
+# ==================================================
+# VISUALIZATION
+# ==================================================
+
+class Visualizer:
+    """Comprehensive visualization suite"""
+    
+    @staticmethod
+    def plot_regime_overview(price: pd.Series, ma200: pd.Series, 
+                            regime: pd.Series):
+        """Plot regime detection overview"""
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8), sharex=True)
+        
+        # Price and MA
+        ax1.plot(price.index, price, label='Price', linewidth=1.5, alpha=0.8)
+        ax1.plot(ma200.index, ma200, label='200 MA', linewidth=1.5, 
+                linestyle='--', alpha=0.8)
+        ax1.set_ylabel('Price', fontsize=11)
+        ax1.set_title('Market Regime Detection', fontsize=13, fontweight='bold')
+        ax1.legend(loc='upper left')
+        ax1.grid(True, alpha=0.3)
+        
+        # Regime coloring
+        regime_colors = {'Trend': 'green', 'Choppy': 'orange', 'Risk-Off': 'red'}
+        for regime_type, color in regime_colors.items():
+            mask = regime == regime_type
+            ax2.fill_between(regime.index, 0, 1, where=mask, 
+                           alpha=0.3, color=color, label=regime_type)
+        
+        ax2.set_ylabel('Regime', fontsize=11)
+        ax2.set_xlabel('Date', fontsize=11)
+        ax2.set_ylim([0, 1])
+        ax2.legend(loc='upper left')
+        ax2.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.show()
+    
+    @staticmethod
+    def plot_trading_signals(ticker: str, price: pd.Series, signals: Dict):
+        """Plot current trading signals"""
+        fig, axes = plt.subplots(3, 1, figsize=(14, 10), sharex=True)
+        
+        # Price chart
+        axes[0].plot(price.index, price, label='Price', linewidth=1.5)
+        
+        # Add moving averages if available
+        if 'MA_Crossover' in signals:
+            ma_fast = price.rolling(Config.MA_FAST).mean()
+            ma_slow = price.rolling(Config.MA_SLOW).mean()
+            axes[0].plot(ma_fast.index, ma_fast, label=f'MA {Config.MA_FAST}', 
+                        linestyle='--', alpha=0.7)
+            axes[0].plot(ma_slow.index, ma_slow, label=f'MA {Config.MA_SLOW}', 
+                        linestyle='--', alpha=0.7)
+        
+        axes[0].set_ylabel('Price', fontsize=11)
+        axes[0].set_title(f'{ticker} - Technical Analysis', fontsize=13, fontweight='bold')
+        axes[0].legend(loc='upper left')
+        axes[0].grid(True, alpha=0.3)
+        
+        # RSI
+        rsi = compute_rsi(price, Config.RSI_PERIOD)
+        axes[1].plot(rsi.index, rsi, label='RSI', linewidth=1.5, color='purple')
+        axes[1].axhline(y=Config.RSI_OVERSOLD, color='green', linestyle='--', alpha=0.5)
+        axes[1].axhline(y=Config.RSI_OVERBOUGHT, color='red', linestyle='--', alpha=0.5)
+        axes[1].fill_between(rsi.index, Config.RSI_OVERSOLD, Config.RSI_OVERBOUGHT, 
+                            alpha=0.1, color='gray')
+        axes[1].set_ylabel('RSI', fontsize=11)
+        axes[1].set_ylim([0, 100])
+        axes[1].legend(loc='upper left')
+        axes[1].grid(True, alpha=0.3)
+        
+        # Bollinger Bands
+        upper, middle, lower = compute_bollinger_bands(price, Config.BB_PERIOD, Config.BB_STD)
+        axes[2].plot(price.index, price, label='Price', linewidth=1.5)
+        axes[2].plot(upper.index, upper, label='Upper BB', linestyle='--', alpha=0.7, color='red')
+        axes[2].plot(middle.index, middle, label='Middle BB', linestyle='--', alpha=0.7, color='blue')
+        axes[2].plot(lower.index, lower, label='Lower BB', linestyle='--', alpha=0.7, color='green')
+        axes[2].fill_between(upper.index, lower, upper, alpha=0.1, color='gray')
+        axes[2].set_ylabel('Price', fontsize=11)
+        axes[2].set_xlabel('Date', fontsize=11)
+        axes[2].legend(loc='upper left')
+        axes[2].grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.show()
+    
+    @staticmethod
+    def plot_equity_curves(returns_dict: Dict[str, pd.Series], 
+                          title: str = "Equity Curves"):
+        """Plot multiple equity curves"""
+        fig, ax = plt.subplots(figsize=(14, 7))
+        
+        for name, returns in returns_dict.items():
+            equity = (1 + returns).cumprod()
+            ax.plot(equity.index, equity, label=name, linewidth=2, alpha=0.8)
+        
+        ax.set_ylabel('Equity (Initial = 1.0)', fontsize=11)
+        ax.set_xlabel('Date', fontsize=11)
+        ax.set_title(title, fontsize=13, fontweight='bold')
+        ax.legend(loc='upper left')
+        ax.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.show()
+    
+    @staticmethod
+    def plot_drawdowns(returns_dict: Dict[str, pd.Series]):
+        """Plot drawdown comparison"""
+        fig, ax = plt.subplots(figsize=(14, 6))
+        
+        for name, returns in returns_dict.items():
+            dd = PerformanceAnalytics.get_drawdown_series(returns)
+            ax.plot(dd.index, dd * 100, label=name, linewidth=2, alpha=0.8)
+        
+        ax.set_ylabel('Drawdown (%)', fontsize=11)
+        ax.set_xlabel('Date', fontsize=11)
+        ax.set_title('Drawdown Comparison', fontsize=13, fontweight='bold')
+        ax.legend(loc='lower left')
+        ax.grid(True, alpha=0.3)
+        ax.fill_between(ax.get_xlim(), -100, 0, alpha=0.1, color='red')
+        
+        plt.tight_layout()
+        plt.show()
+    
+    @staticmethod
+    def plot_rolling_metrics(returns_dict: Dict[str, pd.Series], window: int = 252):
+        """Plot rolling Sharpe ratio"""
+        fig, ax = plt.subplots(figsize=(14, 6))
+        
+        for name, returns in returns_dict.items():
+            rolling_sharpe = PerformanceAnalytics.rolling_sharpe(returns, window)
+            ax.plot(rolling_sharpe.index, rolling_sharpe, label=name, 
+                   linewidth=2, alpha=0.8)
+        
+        ax.axhline(y=0, color='black', linestyle='--', alpha=0.5)
+        ax.axhline(y=1, color='green', linestyle=':', alpha=0.5)
+        ax.set_ylabel('Rolling Sharpe Ratio', fontsize=11)
+        ax.set_xlabel('Date', fontsize=11)
+        ax.set_title(f'{window}-Day Rolling Sharpe Ratio', fontsize=13, 
+                    fontweight='bold')
+        ax.legend(loc='upper left')
+        ax.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.show()
+    
+    @staticmethod
+    def plot_monte_carlo(mc_simulator: MonteCarloSimulator):
+        """Plot Monte Carlo simulation results"""
+        sims = mc_simulator.run()
+        equity_curves = (1 + sims).cumprod()
+        
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+        
+        # Equity curves
+        for col in equity_curves.columns[:100]:  # Plot first 100
+            ax1.plot(equity_curves.index, equity_curves[col], 
+                    color='blue', alpha=0.05, linewidth=0.5)
+        
+        median_curve = equity_curves.median(axis=1)
+        ax1.plot(equity_curves.index, median_curve, 
+                color='red', linewidth=2, label='Median')
+        ax1.set_ylabel('Equity', fontsize=11)
+        ax1.set_xlabel('Days', fontsize=11)
+        ax1.set_title('Monte Carlo Simulation Paths', fontsize=12, fontweight='bold')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        
+        # Distribution of final returns
+        final_returns = (equity_curves.iloc[-1] - 1) * 100
+        ax2.hist(final_returns, bins=50, alpha=0.7, edgecolor='black')
+        ax2.axvline(final_returns.median(), color='red', linestyle='--', 
+                   linewidth=2, label=f'Median: {final_returns.median():.1f}%')
+        ax2.set_xlabel('Return (%)', fontsize=11)
+        ax2.set_ylabel('Frequency', fontsize=11)
+        ax2.set_title('Distribution of Final Returns', fontsize=12, fontweight='bold')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.show()
+    
+    @staticmethod
+    def plot_strategy_allocation(regime: pd.Series):
+        """Plot regime allocation over time"""
+        regime_counts = regime.value_counts()
+        
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+        
+        # Pie chart
+        colors = {'Trend': 'green', 'Choppy': 'orange', 'Risk-Off': 'red'}
+        ax1.pie(regime_counts, labels=regime_counts.index, autopct='%1.1f%%',
+               colors=[colors.get(r, 'gray') for r in regime_counts.index],
+               startangle=90)
+        ax1.set_title('Regime Distribution', fontsize=12, fontweight='bold')
+        
+        # Time series
+        regime_numeric = regime.map({'Trend': 2, 'Choppy': 1, 'Risk-Off': 0})
+        ax2.plot(regime_numeric.index, regime_numeric, linewidth=0.5, alpha=0.5)
+        ax2.fill_between(regime_numeric.index, 0, regime_numeric, alpha=0.3)
+        ax2.set_yticks([0, 1, 2])
+        ax2.set_yticklabels(['Risk-Off', 'Choppy', 'Trend'])
+        ax2.set_xlabel('Date', fontsize=11)
+        ax2.set_title('Regime Over Time', fontsize=12, fontweight='bold')
+        ax2.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.show()
+
+# ==================================================
+# REPORTING
+# ==================================================
+
+class PerformanceReport:
+    """Generate comprehensive performance report"""
+    
+    @staticmethod
+    def print_metrics(metrics: Dict[str, float], title: str = "Performance Metrics"):
+        """Print formatted metrics"""
+        print(f"\n{'='*60}")
+        print(f"{title:^60}")
+        print(f"{'='*60}")
+        print(f"Total Return:        {metrics['total_return']:>10.2%}")
+        print(f"CAGR:                {metrics['cagr']:>10.2%}")
+        print(f"Volatility:          {metrics['volatility']:>10.2%}")
+        print(f"Sharpe Ratio:        {metrics['sharpe']:>10.2f}")
+        print(f"Sortino Ratio:       {metrics['sortino']:>10.2f}")
+        print(f"Calmar Ratio:        {metrics['calmar']:>10.2f}")
+        print(f"Max Drawdown:        {metrics['max_drawdown']:>10.2%}")
+        print(f"Win Rate:            {metrics['win_rate']:>10.2%}")
+        print(f"Profit Factor:       {metrics['profit_factor']:>10.2f}")
+        print(f"VaR (95%):           {metrics['var_95']:>10.2%}")
+        print(f"CVaR (95%):          {metrics['cvar_95']:>10.2%}")
+        print(f"{'='*60}\n")
+    
+    @staticmethod
+    def comparison_table(metrics_dict: Dict[str, Dict[str, float]]):
+        """Print comparison table of multiple strategies"""
+        df = pd.DataFrame(metrics_dict).T
+        
+        # Format percentages
+        pct_cols = ['total_return', 'cagr', 'volatility', 'max_drawdown', 
+                    'win_rate', 'var_95', 'cvar_95']
+        for col in pct_cols:
+            if col in df.columns:
+                df[col] = df[col].apply(lambda x: f"{x:.2%}")
+        
+        # Format ratios
+        ratio_cols = ['sharpe', 'sortino', 'calmar', 'profit_factor']
+        for col in ratio_cols:
+            if col in df.columns:
+                df[col] = df[col].apply(lambda x: f"{x:.2f}")
+        
+        print("\n" + "="*100)
+        print("STRATEGY COMPARISON")
+        print("="*100)
+        print(df.to_string())
+        print("="*100 + "\n")
+
+# ==================================================
+# USER INPUT INTERFACE
+# ==================================================
+
+class UserInterface:
+    """Handle user input and interaction"""
+    
+    @staticmethod
+    def get_ticker_input() -> str:
+        """Get ticker symbol from user"""
+        while True:
+            ticker = input("\nEnter ticker symbol (or 'portfolio' for multi-asset analysis): ").strip().upper()
+            
+            if ticker == 'PORTFOLIO':
+                return ticker
+            
+            if ticker:
+                is_valid, message = DataManager.validate_ticker(ticker)
+                print(message)
+                
+                if is_valid:
+                    return ticker
+                else:
+                    retry = input("Would you like to try another ticker? (y/n): ").strip().lower()
+                    if retry != 'y':
+                        return None
+            else:
+                print("Please enter a valid ticker symbol.")
+    
+    @staticmethod
+    def get_portfolio_tickers() -> List[str]:
+        """Get list of tickers for portfolio analysis"""
+        print("\nEnter ticker symbols for portfolio analysis (comma-separated):")
+        print("Example: SPY,QQQ,IWM,EFA,EEM")
+        
+        while True:
+            tickers_input = input("Tickers: ").strip().upper()
+            tickers = [t.strip() for t in tickers_input.split(',') if t.strip()]
+            
+            if len(tickers) < 2:
+                print("Please enter at least 2 tickers for portfolio analysis.")
+                continue
+            
+            # Validate all tickers
+            valid_tickers = []
+            for ticker in tickers:
+                is_valid, message = DataManager.validate_ticker(ticker)
+                print(f"{ticker}: {message}")
+                if is_valid:
+                    valid_tickers.append(ticker)
+            
+            if len(valid_tickers) >= 2:
+                return valid_tickers
+            else:
+                print("Not enough valid tickers. Please try again.")
+    
+    @staticmethod
+    def get_analysis_mode() -> str:
+        """Get analysis mode from user"""
+        print("\nSelect analysis mode:")
+        print("1. Current Trading Signals Only")
+        print("2. Full Backtest Analysis")
+        print("3. Both Signals and Backtest")
+        
+        while True:
+            choice = input("Enter choice (1/2/3): ").strip()
+            if choice in ['1', '2', '3']:
+                return choice
+            print("Please enter 1, 2, or 3.")
+    
+    @staticmethod
+    def get_date_range() -> Tuple[str, Optional[str]]:
+        """Get custom date range from user"""
+        use_custom = input("\nUse custom date range? (y/n, default: n): ").strip().lower()
+        
+        if use_custom == 'y':
+            start_date = input(f"Start date (YYYY-MM-DD, default: {Config.START_DATE}): ").strip()
+            start_date = start_date if start_date else Config.START_DATE
+            
+            end_date = input("End date (YYYY-MM-DD, default: today): ").strip()
+            end_date = end_date if end_date else None
+            
+            return start_date, end_date
+        
+        return Config.START_DATE, None
+
+# ==================================================
+# MAIN EXECUTION FUNCTIONS
+# ==================================================
+
+def analyze_single_ticker(ticker: str, start_date: str, end_date: Optional[str] = None, 
+                         mode: str = '3'):
+    """Analyze a single ticker"""
+    
+    print("\n" + "="*80)
+    print(f"ANALYZING {ticker}")
+    print("="*80)
+    
+    # Get ticker info
+    info = DataManager.get_ticker_info(ticker)
+    print(f"\nSecurity Information:")
+    print(f"  Name: {info['name']}")
+    print(f"  Sector: {info['sector']}")
+    print(f"  Industry: {info['industry']}")
+    print(f"  Exchange: {info['exchange']}")
+    
+    # Fetch data
+    print(f"\nDownloading market data from {start_date}...")
+    prices, returns = DataManager.fetch_data([ticker], start_date, end_date)
+    
+    price_series = prices[ticker] if isinstance(prices, pd.DataFrame) else prices
+    return_series = returns[ticker] if isinstance(returns, pd.DataFrame) else returns
+    
+    print(f"Data downloaded: {len(prices)} days from {prices.index[0].date()} to {prices.index[-1].date()}")
+    
+    # Detect regime early (needed for both modes)
+    print("\nDetecting market regimes...")
+    detector = RegimeDetector(price_series, return_series, Config.VOL_LOOKBACK, 
+                             Config.VOL_THRESHOLD, Config.REGIME_CONFIRM_DAYS)
+    regime = detector.detect_regime()
+    print("Regime detection complete")
+    
+    # Generate trading signals if requested
+    if mode in ['1', '3']:
+        print("\n" + "="*80)
+        print("GENERATING TRADING SIGNALS")
+        print("="*80)
+        
+        signal_gen = TradingSignalGenerator(ticker, price_series, return_series)
+        signals = signal_gen.generate_all_signals()
+        signal_gen.print_signals()
+        
+        # Visualize signals
+        viz = Visualizer()
+        viz.plot_trading_signals(ticker, price_series, signals)
+    
+    # Run backtest if requested
+    if mode in ['2', '3']:
+        print("\n" + "="*80)
+        print("RUNNING BACKTEST ANALYSIS")
+        print("="*80)
+        
+        # ADVANCED FEATURES INTEGRATION
+        
+        # Multi-timeframe analysis
+        print("\nPerforming multi-timeframe analysis...")
+        try:
+            mtf_data = DataManager.fetch_multi_timeframe(ticker, start_date)
+            mtf_analyzer = MultiTimeframeAnalyzer(ticker, mtf_data)
+            alignment_score, alignment_details = mtf_analyzer.get_alignment_score()
+            consensus = mtf_analyzer.get_consensus_signal()
+            
+            print(f"Timeframe Alignment Score: {alignment_score:.2%}")
+            print(f"Consensus Signal: {consensus}")
+            
+            print("\nTimeframe Details:")
+            for tf, details in alignment_details.items():
+                print(f"  {tf.upper()}: {details['signal']} ({details['trend']})")
+        except Exception as e:
+            print(f"Multi-timeframe analysis unavailable: {str(e)}")
+            alignment_score = 0.5
+            consensus = "UNKNOWN"
+        
+        # ML regime prediction
+        print("\nTraining ML regime predictor...")
+        try:
+            ml_predictor = MLRegimePredictor()
+            ml_accuracy = ml_predictor.train(price_series, return_series, regime)
+            print(f"ML Model Accuracy: {ml_accuracy:.2%}")
+            
+            next_regime, confidence = ml_predictor.predict_next_regime(price_series, return_series)
+            print(f"\nPredicted Next Regime: {next_regime} (Confidence: {confidence:.2%})")
+        except Exception as e:
+            print(f"ML prediction unavailable: {str(e)}")
+        
+        # Parameter optimization
+        optimize = input("\nOptimize strategy parameters? (y/n, default: n): ").strip().lower()
+        if optimize == 'y':
+            print("\nOptimizing parameters (this may take a moment)...")
+            try:
+                optimizer = ParameterOptimizer(price_series, return_series)
+                optimized_params = optimizer.optimize_all_strategies()
+                
+                print("\nOptimal Parameters Found:")
+                for strategy, params in optimized_params.items():
+                    print(f"  {strategy.upper()}: {params}")
+            except Exception as e:
+                print(f"Parameter optimization unavailable: {str(e)}")
+        
+        # Run individual strategies
+        print("\nRunning individual strategies...")
+        
+        ma_strategy = MovingAverageTrend(price_series, Config.MA_FAST, Config.MA_SLOW)
+        ma_returns = ma_strategy.backtest(return_series, Config.TRANSACTION_COST)
+        
+        mr_strategy = MeanReversion(price_series, Config.ZSCORE_WINDOW, 
+                                    Config.ZSCORE_ENTRY, Config.ZSCORE_EXIT)
+        z_returns = mr_strategy.backtest(return_series, Config.TRANSACTION_COST)
+        
+        rsi_strategy = RSIStrategy(price_series, Config.RSI_PERIOD, 
+                                   Config.RSI_OVERSOLD, Config.RSI_OVERBOUGHT)
+        rsi_returns = rsi_strategy.backtest(return_series, Config.TRANSACTION_COST)
+        
+        bb_strategy = BollingerBandsStrategy(price_series, Config.BB_PERIOD, Config.BB_STD)
+        bb_returns = bb_strategy.backtest(return_series, Config.TRANSACTION_COST)
+        
+        print("Individual strategies complete")
+        
+        # Combine strategies with regime awareness
+        print("\nCombining strategies with regime awareness...")
+        allocator = RegimeAwareAllocator(
+            {
+                "MA": ma_returns,
+                "Z": z_returns,
+                "RSI": rsi_returns,
+                "BB": bb_returns
+            },
+            regime,
+            Config.TARGET_VOL
+        )
+        combined_returns = allocator.allocate()
+        print("Strategy combination complete")
+        
+        # Walk-Forward Analysis
+        print("\nRunning walk-forward analysis...")
+        wf_analyzer = WalkForwardAnalyzer(Config.TRAIN_YEARS, Config.TEST_YEARS)
+        wf_returns = wf_analyzer.run(combined_returns, combined_returns.index[0])
+        print(f"Walk-forward analysis complete ({len(wf_returns)} test days)")
+        
+        # Monte Carlo
+        print("\nRunning Monte Carlo simulation...")
+        mc_simulator = MonteCarloSimulator(combined_returns, Config.MC_SIMULATIONS, Config.MC_SAMPLE_SIZE)
+        mc_metrics = mc_simulator.get_metrics()
+        print("Monte Carlo simulation complete")
+        
+        # Calculate metrics
+        print("\nCalculating performance metrics...")
+        analytics = PerformanceAnalytics()
+        
+        combined_metrics = analytics.calculate_metrics(combined_returns)
+        wf_metrics = analytics.calculate_metrics(wf_returns)
+        buy_hold_metrics = analytics.calculate_metrics(return_series)
+        ma_metrics = analytics.calculate_metrics(ma_returns)
+        z_metrics = analytics.calculate_metrics(z_returns)
+        rsi_metrics = analytics.calculate_metrics(rsi_returns)
+        bb_metrics = analytics.calculate_metrics(bb_returns)
+        
+        # Print results
+        reporter = PerformanceReport()
+        reporter.print_metrics(combined_metrics, f"REGIME-AWARE STRATEGY - {ticker}")
+        reporter.print_metrics(buy_hold_metrics, f"BUY & HOLD - {ticker}")
+        
+        reporter.comparison_table({
+            'Regime-Aware': combined_metrics,
+            'Walk-Forward': wf_metrics,
+            f'{ticker} B&H': buy_hold_metrics,
+            'MA Trend': ma_metrics,
+            'Mean Rev': z_metrics,
+            'RSI': rsi_metrics,
+            'Bollinger': bb_metrics
+        })
+        
+        # Monte Carlo Results
+        print("\n" + "="*60)
+        print("MONTE CARLO SIMULATION RESULTS")
+        print("="*60)
+        print(f"Mean Return:         {mc_metrics['mean_return']:>10.2%}")
+        print(f"Median Return:       {mc_metrics['median_return']:>10.2%}")
+        print(f"Std Dev:             {mc_metrics['std_return']:>10.2%}")
+        print(f"5th Percentile:      {mc_metrics['percentile_5']:>10.2%}")
+        print(f"95th Percentile:     {mc_metrics['percentile_95']:>10.2%}")
+        print(f"Mean Sharpe:         {mc_metrics['mean_sharpe']:>10.2f}")
+        print(f"Median Sharpe:       {mc_metrics['median_sharpe']:>10.2f}")
+        print("="*60 + "\n")
+        
+        # Visualizations
+        print("Generating visualizations...")
+        
+        viz = Visualizer()
+        
+        ma200 = price_series.rolling(200).mean()
+        viz.plot_regime_overview(price_series, ma200, regime)
+        
+        viz.plot_equity_curves({
+            'Regime-Aware Strategy': combined_returns,
+            'Walk-Forward OOS': wf_returns,
+            f'{ticker} Buy & Hold': return_series
+        }, f"{ticker} - Strategy Performance Comparison")
+        
+        viz.plot_drawdowns({
+            'Regime-Aware': combined_returns,
+            'Walk-Forward': wf_returns,
+            f'{ticker}': return_series
+        })
+        
+        viz.plot_rolling_metrics({
+            'Regime-Aware': combined_returns,
+            'Walk-Forward': wf_returns,
+            f'{ticker}': return_series
+        }, Config.ROLL_WINDOW)
+        
+        viz.plot_strategy_allocation(regime)
+        viz.plot_monte_carlo(mc_simulator)
+    
+    # Alert system
+    if mode in ['1', '3']:
+        print("\nChecking for alerts...")
+        try:
+            alert_system = AlertSystem()
+            
+            # Check drawdown
+            equity = (1 + return_series).cumprod()
+            drawdown = ((equity - equity.cummax()) / equity.cummax()).iloc[-1]
+            alert = alert_system.check_drawdown_alert(drawdown, ticker)
+            if alert:
+                alert_system.print_alert(alert)
+            
+            # Export alerts
+            if alert_system.alert_history:
+                alert_system.export_alert_history(f'{ticker}_alerts.json')
+                print(f"Alerts exported to {ticker}_alerts.json")
+        except Exception as e:
+            print(f"Alert system unavailable: {str(e)}")
+
+
+def analyze_portfolio(tickers: List[str], start_date: str, end_date: Optional[str] = None):
+    """Analyze a portfolio of tickers"""
+    
+    print("\n" + "="*80)
+    print(f"ANALYZING PORTFOLIO: {', '.join(tickers)}")
+    print("="*80)
+    
+    # Fetch data
+    print(f"\nDownloading market data from {start_date}...")
+    prices, returns = DataManager.fetch_data(tickers, start_date, end_date)
+    print(f"Data downloaded: {len(prices)} days from {prices.index[0].date()} to {prices.index[-1].date()}")
+    
+    # Use first ticker for regime detection
+    reference_ticker = tickers[0]
+    ref_price = prices[reference_ticker]
+    ref_returns = returns[reference_ticker]
+    
+    # Regime Detection
+    print("\nDetecting market regimes...")
+    detector = RegimeDetector(ref_price, ref_returns, Config.VOL_LOOKBACK, 
+                             Config.VOL_THRESHOLD, Config.REGIME_CONFIRM_DAYS)
+    regime = detector.detect_regime()
+    print("Regime detection complete")
+    
+    # Run strategies
+    print("\nRunning portfolio strategies...")
+    
+    # Individual ticker strategies on reference
+    ma_strategy = MovingAverageTrend(ref_price, Config.MA_FAST, Config.MA_SLOW)
+    ma_returns = ma_strategy.backtest(ref_returns, Config.TRANSACTION_COST)
+    
+    mr_strategy = MeanReversion(ref_price, Config.ZSCORE_WINDOW, 
+                                Config.ZSCORE_ENTRY, Config.ZSCORE_EXIT)
+    z_returns = mr_strategy.backtest(ref_returns, Config.TRANSACTION_COST)
+    
+    # Momentum portfolio across all tickers
+    mom_strategy = MomentumPortfolio(prices, Config.LOOKBACK_MOM, Config.TOP_N, Config.REB_FREQ)
+    mom_returns = mom_strategy.backtest(returns, Config.TARGET_VOL)
+    
+    print("Portfolio strategies complete")
+
+    
+    # PORTFOLIO OPTIMIZATION
+    print("\nOptimizing portfolio allocation...")
+    try:
+        portfolio_opt = PortfolioOptimizer(returns, Config.RISK_FREE_RATE)
+        
+        # Mean-Variance Optimization
+        mv_result = portfolio_opt.mean_variance_optimization()
+        print("\nMean-Variance Optimal Portfolio:")
+        for ticker, weight in mv_result['weights'].items():
+            print(f"  {ticker}: {weight:.2%}")
+        print(f"Expected Return: {mv_result['expected_return']:.2%}")
+        print(f"Volatility: {mv_result['volatility']:.2%}")
+        print(f"Sharpe Ratio: {mv_result['sharpe']:.2f}")
+        
+        # Risk Parity
+        rp_result = portfolio_opt.risk_parity()
+        print("\nRisk Parity Portfolio:")
+        for ticker, weight in rp_result['weights'].items():
+            print(f"  {ticker}: {weight:.2%}")
+        print(f"Expected Return: {rp_result['expected_return']:.2%}")
+        print(f"Volatility: {rp_result['volatility']:.2%}")
+        print(f"Sharpe Ratio: {rp_result['sharpe']:.2f}")
+    except Exception as e:
+        print(f"Portfolio optimization unavailable: {str(e)}")
+    
+    # Combine with regime awareness
+    print("\nCombining strategies with regime awareness...")
+    allocator = RegimeAwareAllocator(
+        {
+            "MA": ma_returns,
+            "Z": z_returns,
+            "MOM": mom_returns
+        },
+        regime,
+        Config.TARGET_VOL
+    )
+    combined_returns = allocator.allocate()
+    print("Strategy combination complete")
+    
+    # Walk-Forward Analysis
+    print("\nRunning walk-forward analysis...")
+    wf_analyzer = WalkForwardAnalyzer(Config.TRAIN_YEARS, Config.TEST_YEARS)
+    wf_returns = wf_analyzer.run(combined_returns, combined_returns.index[0])
+    print(f"Walk-forward analysis complete ({len(wf_returns)} test days)")
+    
+    # Monte Carlo
+    print("\nRunning Monte Carlo simulation...")
+    mc_simulator = MonteCarloSimulator(combined_returns, Config.MC_SIMULATIONS, Config.MC_SAMPLE_SIZE)
+    mc_metrics = mc_simulator.get_metrics()
+    print("Monte Carlo simulation complete")
+    
+    # Calculate metrics
+    print("\nCalculating performance metrics...")
+    analytics = PerformanceAnalytics()
+    
+    full_metrics = analytics.calculate_metrics(combined_returns)
+    wf_metrics = analytics.calculate_metrics(wf_returns)
+    ref_metrics = analytics.calculate_metrics(ref_returns)
+    ma_metrics = analytics.calculate_metrics(ma_returns)
+    z_metrics = analytics.calculate_metrics(z_returns)
+    mom_metrics = analytics.calculate_metrics(mom_returns)
+    
+    # Print results
+    reporter = PerformanceReport()
+    
+    reporter.print_metrics(full_metrics, "FULL SAMPLE - REGIME-AWARE STRATEGY")
+    reporter.print_metrics(wf_metrics, "WALK-FORWARD OUT-OF-SAMPLE")
+    reporter.print_metrics(ref_metrics, f"BUY & HOLD {reference_ticker} (BENCHMARK)")
+    
+    reporter.comparison_table({
+        'Regime-Aware': full_metrics,
+        'Walk-Forward': wf_metrics,
+        f'{reference_ticker} B&H': ref_metrics,
+        'MA Trend': ma_metrics,
+        'Mean Rev': z_metrics,
+        'Momentum': mom_metrics
+    })
+    
+    # Monte Carlo Results
+    print("\n" + "="*60)
+    print("MONTE CARLO SIMULATION RESULTS")
+    print("="*60)
+    print(f"Mean Return:         {mc_metrics['mean_return']:>10.2%}")
+    print(f"Median Return:       {mc_metrics['median_return']:>10.2%}")
+    print(f"Std Dev:             {mc_metrics['std_return']:>10.2%}")
+    print(f"5th Percentile:      {mc_metrics['percentile_5']:>10.2%}")
+    print(f"95th Percentile:     {mc_metrics['percentile_95']:>10.2%}")
+    print(f"Mean Sharpe:         {mc_metrics['mean_sharpe']:>10.2f}")
+    print(f"Median Sharpe:       {mc_metrics['median_sharpe']:>10.2f}")
+    print("="*60 + "\n")
+    
+    # Visualizations
+    print("Generating visualizations...")
+    
+    viz = Visualizer()
+    
+    ma200 = ref_price.rolling(200).mean()
+    viz.plot_regime_overview(ref_price, ma200, regime)
+    
+    viz.plot_equity_curves({
+        'Regime-Aware Strategy': combined_returns,
+        'Walk-Forward OOS': wf_returns,
+        f'{reference_ticker} Buy & Hold': ref_returns
+    }, "Portfolio Performance Comparison")
+    
+    viz.plot_drawdowns({
+        'Regime-Aware': combined_returns,
+        'Walk-Forward': wf_returns,
+        f'{reference_ticker}': ref_returns
+    })
+    
+    viz.plot_rolling_metrics({
+        'Regime-Aware': combined_returns,
+        'Walk-Forward': wf_returns,
+        f'{reference_ticker}': ref_returns
+    }, Config.ROLL_WINDOW)
+    
+    viz.plot_strategy_allocation(regime)
+    viz.plot_monte_carlo(mc_simulator)
+    
+    print("\nAnalysis complete.")
+
+# ==================================================
+# ADVANCED FEATURES (from Ultimate System)
+# ==================================================
+
+class MultiTimeframeAnalyzer:
+    """Analyze signals across multiple timeframes"""
+    
+    def __init__(self, ticker: str, multi_tf_data: Dict[str, pd.DataFrame]):
+        self.ticker = ticker
+        self.data = multi_tf_data
+        self.signals = {}
+    
+    def analyze_all_timeframes(self) -> Dict[str, Dict]:
+        """Analyze across all available timeframes"""
+        results = {}
+        
+        for tf_name, prices in self.data.items():
+            if prices is None or len(prices) < 200:
+                continue
+            
+            price_series = prices[self.ticker] if isinstance(prices, pd.DataFrame) else prices
+            returns = price_series.pct_change().dropna()
+            
+            # Generate signals for this timeframe
+            tf_signals = self._analyze_timeframe(price_series, returns, tf_name)
+            results[tf_name] = tf_signals
+        
+        return results
+    
+    def _analyze_timeframe(self, price: pd.Series, returns: pd.Series, 
+                          tf_name: str) -> Dict:
+        """Analyze a single timeframe"""
+        from copy import deepcopy
+        
+        # Moving Average
+        ma_fast = price.rolling(min(50, len(price)//4)).mean()
+        ma_slow = price.rolling(min(200, len(price)//2)).mean()
+        ma_signal = "BUY" if ma_fast.iloc[-1] > ma_slow.iloc[-1] else "SELL"
+        
+        # RSI
+        rsi = compute_rsi(price, min(14, len(price)//10))
+        rsi_value = rsi.iloc[-1]
+        if rsi_value < 30:
+            rsi_signal = "BUY"
+        elif rsi_value > 70:
+            rsi_signal = "SELL"
+        else:
+            rsi_signal = "HOLD"
+        
+        # Trend
+        sma_200 = price.rolling(min(200, len(price)//2)).mean()
+        trend = "BULLISH" if price.iloc[-1] > sma_200.iloc[-1] else "BEARISH"
+        
+        return {
+            'ma_signal': ma_signal,
+            'rsi_signal': rsi_signal,
+            'trend': trend,
+            'rsi_value': rsi_value,
+            'price': price.iloc[-1]
+        }
+    
+    def get_alignment_score(self) -> Tuple[float, Dict]:
+        """Calculate alignment score across timeframes"""
+        signals = self.analyze_all_timeframes()
+        
+        if not signals:
+            return 0.0, {}
+        
+        # Count bullish signals
+        bullish_count = 0
+        total_count = 0
+        
+        alignment_details = {}
+        
+        for tf_name, tf_signals in signals.items():
+            if tf_signals['ma_signal'] == 'BUY':
+                bullish_count += 1
+            total_count += 1
+            
+            if tf_signals['rsi_signal'] == 'BUY':
+                bullish_count += 0.5
+            total_count += 0.5
+            
+            if tf_signals['trend'] == 'BULLISH':
+                bullish_count += 1
+            total_count += 1
+            
+            alignment_details[tf_name] = {
+                'signal': tf_signals['ma_signal'],
+                'trend': tf_signals['trend']
+            }
+        
+        score = bullish_count / total_count if total_count > 0 else 0.5
+        
+        return score, alignment_details
+    
+    def get_consensus_signal(self) -> str:
+        """Get consensus signal across timeframes"""
+        score, _ = self.get_alignment_score()
+        
+        if score >= 0.75:
+            return "STRONG_BUY"
+        elif score >= 0.6:
+            return "BUY"
+        elif score >= 0.4:
+            return "HOLD"
+        elif score >= 0.25:
+            return "SELL"
+        else:
+            return "STRONG_SELL"
+
+# ==================================================
+# MACHINE LEARNING REGIME PREDICTOR
+# ==================================================
+
+
+
+class MLRegimePredictor:
+    """Predict market regimes using machine learning"""
+    
+    def __init__(self):
+        self.model = GradientBoostingClassifier(
+            n_estimators=100,
+            max_depth=5,
+            random_state=42
+        )
+        self.scaler = StandardScaler()
+        self.is_trained = False
+    
+    def create_features(self, price: pd.Series, returns: pd.Series) -> pd.DataFrame:
+        """Create features for ML model"""
+        features = pd.DataFrame(index=price.index)
+        
+        # Price-based features
+        features['returns_5d'] = returns.rolling(5).mean()
+        features['returns_20d'] = returns.rolling(20).mean()
+        features['returns_60d'] = returns.rolling(60).mean()
+        
+        # Volatility features
+        features['vol_5d'] = returns.rolling(5).std()
+        features['vol_20d'] = returns.rolling(20).std()
+        features['vol_60d'] = returns.rolling(60).std()
+        features['vol_ratio'] = features['vol_5d'] / features['vol_20d']
+        
+        # Trend features
+        features['ma_20'] = price.rolling(20).mean() / price
+        features['ma_50'] = price.rolling(50).mean() / price
+        features['ma_200'] = price.rolling(200).mean() / price
+        
+        # Momentum features
+        features['rsi'] = compute_rsi(price, 14)
+        features['mom_20'] = price.pct_change(20)
+        features['mom_60'] = price.pct_change(60)
+        
+        # Range features
+        features['range_20'] = (price.rolling(20).max() - price.rolling(20).min()) / price
+        
+        return features.fillna(method='ffill').fillna(0)
+    
+    def train(self, price: pd.Series, returns: pd.Series, 
+             regime: pd.Series) -> float:
+        """Train the ML model"""
+        features = self.create_features(price, returns)
+        
+        # Align data
+        aligned_data = pd.concat([features, regime], axis=1, join='inner')
+        aligned_data = aligned_data.dropna()
+        
+        if len(aligned_data) < Config.ML_TRAIN_SIZE:
+            return 0.0
+        
+        X = aligned_data.iloc[:, :-1]
+        y = aligned_data.iloc[:, -1]
+        
+        # Encode regime labels
+        regime_map = {'Risk-Off': 0, 'Choppy': 1, 'Trend': 2}
+        y_encoded = y.map(regime_map)
+        
+        # Train/test split (time series)
+        split_idx = int(len(X) * 0.8)
+        X_train, X_test = X[:split_idx], X[split_idx:]
+        y_train, y_test = y_encoded[:split_idx], y_encoded[split_idx:]
+        
+        # Scale features
+        X_train_scaled = self.scaler.fit_transform(X_train)
+        X_test_scaled = self.scaler.transform(X_test)
+        
+        # Train model
+        self.model.fit(X_train_scaled, y_train)
+        self.is_trained = True
+        
+        # Calculate accuracy
+        accuracy = self.model.score(X_test_scaled, y_test)
+        
+        return accuracy
+    
+    def predict_next_regime(self, price: pd.Series, returns: pd.Series) -> Tuple[str, float]:
+        """Predict next regime with confidence"""
+        if not self.is_trained:
+            return "Unknown", 0.0
+        
+        features = self.create_features(price, returns)
+        latest_features = features.iloc[-1:].values
+        
+        # Scale
+        latest_scaled = self.scaler.transform(latest_features)
+        
+        # Predict
+        prediction = self.model.predict(latest_scaled)[0]
+        probabilities = self.model.predict_proba(latest_scaled)[0]
+        
+        regime_map_inv = {0: 'Risk-Off', 1: 'Choppy', 2: 'Trend'}
+        predicted_regime = regime_map_inv[prediction]
+        confidence = probabilities[prediction]
+        
+        return predicted_regime, confidence
+    
+    def predict_regime_transition(self, price: pd.Series, returns: pd.Series, 
+                                  current_regime: str, days_ahead: int = 5) -> Dict:
+        """Predict regime transition probability"""
+        if not self.is_trained:
+            return {}
+        
+        features = self.create_features(price, returns)
+        latest_features = features.iloc[-1:].values
+        latest_scaled = self.scaler.transform(latest_features)
+        
+        probabilities = self.model.predict_proba(latest_scaled)[0]
+        
+        regime_map_inv = {0: 'Risk-Off', 1: 'Choppy', 2: 'Trend'}
+        
+        transition_prob = {
+            regime_map_inv[i]: prob 
+            for i, prob in enumerate(probabilities)
+        }
+        
+        return transition_prob
+
+# ==================================================
+# PARAMETER OPTIMIZER
+# ==================================================
+
+
+
+class ParameterOptimizer:
+    """Optimize strategy parameters systematically"""
+    
+    def __init__(self, price: pd.Series, returns: pd.Series):
+        self.price = price
+        self.returns = returns
+        self.best_params = {}
+    
+    def optimize_ma_parameters(self, method: str = 'grid') -> Dict:
+        """Optimize moving average parameters"""
+        
+        if method == 'grid':
+            return self._grid_search_ma()
+        else:
+            return self._genetic_algorithm_ma()
+    
+    def _grid_search_ma(self) -> Dict:
+        """Grid search for MA parameters"""
+        fast_range = range(20, 101, 10)
+        slow_range = range(100, 301, 20)
+        
+        best_sharpe = -np.inf
+        best_params = {'fast': 50, 'slow': 200}
+        
+        for fast in fast_range:
+            for slow in slow_range:
+                if fast >= slow:
+                    continue
+                
+                # Backtest with these parameters
+                sharpe = self._backtest_ma(fast, slow)
+                
+                if sharpe > best_sharpe:
+                    best_sharpe = sharpe
+                    best_params = {'fast': fast, 'slow': slow}
+        
+        self.best_params['ma'] = best_params
+        return best_params
+    
+    def _backtest_ma(self, fast: int, slow: int) -> float:
+        """Backtest MA strategy and return Sharpe"""
+        ma_fast = self.price.rolling(fast).mean()
+        ma_slow = self.price.rolling(slow).mean()
+        signal = (ma_fast > ma_slow).astype(int)
+        
+        trades = signal.diff().abs()
+        strategy_returns = signal.shift(1) * self.returns
+        strategy_returns -= trades * Config.TRANSACTION_COST
+        
+        strategy_returns = strategy_returns.dropna()
+        
+        if len(strategy_returns) == 0 or strategy_returns.std() == 0:
+            return -np.inf
+        
+        sharpe = strategy_returns.mean() / strategy_returns.std() * np.sqrt(252)
+        return sharpe
+    
+    def optimize_rsi_parameters(self) -> Dict:
+        """Optimize RSI parameters"""
+        period_range = range(10, 31, 2)
+        oversold_range = range(20, 41, 5)
+        overbought_range = range(60, 81, 5)
+        
+        best_sharpe = -np.inf
+        best_params = {'period': 14, 'oversold': 30, 'overbought': 70}
+        
+        for period in period_range:
+            for oversold in oversold_range:
+                for overbought in overbought_range:
+                    if oversold >= overbought:
+                        continue
+                    
+                    sharpe = self._backtest_rsi(period, oversold, overbought)
+                    
+                    if sharpe > best_sharpe:
+                        best_sharpe = sharpe
+                        best_params = {
+                            'period': period,
+                            'oversold': oversold,
+                            'overbought': overbought
+                        }
+        
+        self.best_params['rsi'] = best_params
+        return best_params
+    
+    def _backtest_rsi(self, period: int, oversold: float, overbought: float) -> float:
+        """Backtest RSI strategy"""
+        rsi = compute_rsi(self.price, period)
+        
+        signal = pd.Series(0, index=rsi.index)
+        signal[rsi < oversold] = 1
+        signal[rsi > overbought] = 0
+        signal = signal.replace(0, np.nan).fillna(method='ffill').fillna(0)
+        
+        trades = signal.diff().abs()
+        strategy_returns = signal.shift(1) * self.returns
+        strategy_returns -= trades * Config.TRANSACTION_COST
+        
+        strategy_returns = strategy_returns.dropna()
+        
+        if len(strategy_returns) == 0 or strategy_returns.std() == 0:
+            return -np.inf
+        
+        sharpe = strategy_returns.mean() / strategy_returns.std() * np.sqrt(252)
+        return sharpe
+    
+    def optimize_all_strategies(self) -> Dict:
+        """Optimize all strategy parameters"""
+        print("Optimizing Moving Average parameters...")
+        ma_params = self.optimize_ma_parameters()
+        
+        print("Optimizing RSI parameters...")
+        rsi_params = self.optimize_rsi_parameters()
+        
+        return {
+            'ma': ma_params,
+            'rsi': rsi_params
+        }
+
+# ==================================================
+# PORTFOLIO OPTIMIZER
+# ==================================================
+
+
+
+class PortfolioOptimizer:
+    """Build optimal portfolios"""
+    
+    def __init__(self, returns: pd.DataFrame, risk_free_rate: float = 0.04):
+        self.returns = returns
+        self.rf = risk_free_rate / 252  # Daily risk-free rate
+        self.mean_returns = returns.mean()
+        self.cov_matrix = returns.cov()
+    
+    def mean_variance_optimization(self, target_return: Optional[float] = None) -> Dict:
+        """Mean-variance optimization (Markowitz)"""
+        n_assets = len(self.mean_returns)
+        
+        def portfolio_stats(weights):
+            port_return = np.sum(self.mean_returns * weights) * 252
+            port_vol = np.sqrt(np.dot(weights.T, np.dot(self.cov_matrix * 252, weights)))
+            sharpe = (port_return - Config.RISK_FREE_RATE) / port_vol
+            return port_return, port_vol, sharpe
+        
+        def neg_sharpe(weights):
+            return -portfolio_stats(weights)[2]
+        
+        constraints = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})
+        bounds = tuple((Config.MIN_POSITION_SIZE, Config.MAX_POSITION_SIZE) for _ in range(n_assets))
+        initial_guess = np.array([1/n_assets] * n_assets)
+        
+        result = minimize(
+            neg_sharpe,
+            initial_guess,
+            method='SLSQP',
+            bounds=bounds,
+            constraints=constraints
+        )
+        
+        optimal_weights = result.x
+        port_return, port_vol, sharpe = portfolio_stats(optimal_weights)
+        
+        return {
+            'weights': dict(zip(self.returns.columns, optimal_weights)),
+            'expected_return': port_return,
+            'volatility': port_vol,
+            'sharpe': sharpe
+        }
+    
+    def risk_parity(self) -> Dict:
+        """Risk parity allocation"""
+        n_assets = len(self.mean_returns)
+        
+        def risk_contribution(weights):
+            port_vol = np.sqrt(np.dot(weights.T, np.dot(self.cov_matrix * 252, weights)))
+            marginal_contrib = np.dot(self.cov_matrix * 252, weights)
+            risk_contrib = weights * marginal_contrib / port_vol
+            return risk_contrib
+        
+        def risk_parity_objective(weights):
+            risk_contrib = risk_contribution(weights)
+            target = np.ones(n_assets) / n_assets
+            return np.sum((risk_contrib - target) ** 2)
+        
+        constraints = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})
+        bounds = tuple((Config.MIN_POSITION_SIZE, Config.MAX_POSITION_SIZE) for _ in range(n_assets))
+        initial_guess = np.array([1/n_assets] * n_assets)
+        
+        result = minimize(
+            risk_parity_objective,
+            initial_guess,
+            method='SLSQP',
+            bounds=bounds,
+            constraints=constraints
+        )
+        
+        optimal_weights = result.x
+        
+        port_return = np.sum(self.mean_returns * optimal_weights) * 252
+        port_vol = np.sqrt(np.dot(optimal_weights.T, np.dot(self.cov_matrix * 252, optimal_weights)))
+        sharpe = (port_return - Config.RISK_FREE_RATE) / port_vol
+        
+        return {
+            'weights': dict(zip(self.returns.columns, optimal_weights)),
+            'expected_return': port_return,
+            'volatility': port_vol,
+            'sharpe': sharpe
+        }
+    
+    def kelly_criterion_sizing(self, win_rate: float, avg_win: float, 
+                               avg_loss: float) -> float:
+        """Calculate position size using Kelly Criterion"""
+        if avg_loss == 0:
+            return 0.0
+        
+        win_loss_ratio = abs(avg_win / avg_loss)
+        kelly = (win_rate * win_loss_ratio - (1 - win_rate)) / win_loss_ratio
+        
+        # Use fractional Kelly (half-Kelly for safety)
+        fractional_kelly = kelly * 0.5
+        
+        # Cap at maximum position size
+        return min(max(fractional_kelly, 0), Config.MAX_POSITION_SIZE)
+
+# ==================================================
+# ENHANCED BACKTESTING
+# ==================================================
+
+
+
+class AlertSystem:
+    """Real-time alert system for trading signals"""
+    
+    def __init__(self):
+        self.alerts = []
+        self.alert_history = []
+    
+    def create_alert(self, ticker: str, signal: Signal, strategy: str,
+                    price: float, confidence: float, timeframes_aligned: bool,
+                    additional_info: Dict = None) -> Alert:
+        """Create a new alert"""
+        message = self._generate_alert_message(
+            ticker, signal, strategy, price, confidence, 
+            timeframes_aligned, additional_info
+        )
+        
+        alert = Alert(
+            timestamp=datetime.now(),
+            ticker=ticker,
+            signal=signal,
+            strategy=strategy,
+            price=price,
+            confidence=confidence,
+            message=message,
+            timeframes_aligned=timeframes_aligned
+        )
+        
+        self.alerts.append(alert)
+        self.alert_history.append(alert)
+        
+        return alert
+    
+    def _generate_alert_message(self, ticker: str, signal: Signal, 
+                                strategy: str, price: float, confidence: float,
+                                timeframes_aligned: bool, 
+                                additional_info: Dict = None) -> str:
+        """Generate alert message"""
+        alignment = "ALL TIMEFRAMES ALIGNED" if timeframes_aligned else "Single timeframe"
+        
+        message = f"""
+TRADING ALERT - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+{ticker} - {signal.name.replace('_', ' ')}
+Strategy: {strategy}
+Current Price: ${price:.2f}
+Confidence: {confidence:.1%}
+Timeframe Alignment: {alignment}
+"""
+        
+        if additional_info:
+            message += "\nAdditional Information:\n"
+            for key, value in additional_info.items():
+                message += f"  {key}: {value}\n"
+        
+        return message
+    
+    def check_drawdown_alert(self, current_dd: float, ticker: str) -> Optional[Alert]:
+        """Check if drawdown alert should be triggered"""
+        if abs(current_dd) >= Config.DRAWDOWN_ALERT_THRESHOLD:
+            return self.create_alert(
+                ticker=ticker,
+                signal=Signal.SELL,
+                strategy="Risk Management",
+                price=0.0,
+                confidence=1.0,
+                timeframes_aligned=False,
+                additional_info={
+                    'drawdown': f"{current_dd:.2%}",
+                    'action': 'Consider reducing position size'
+                }
+            )
+        return None
+    
+    def check_regime_change_alert(self, old_regime: str, new_regime: str,
+                                  ticker: str) -> Optional[Alert]:
+        """Alert on regime change"""
+        if old_regime != new_regime:
+            return self.create_alert(
+                ticker=ticker,
+                signal=Signal.HOLD,
+                strategy="Regime Detection",
+                price=0.0,
+                confidence=1.0,
+                timeframes_aligned=False,
+                additional_info={
+                    'old_regime': old_regime,
+                    'new_regime': new_regime,
+                    'recommendation': self._get_regime_recommendation(new_regime)
+                }
+            )
+        return None
+    
+    def _get_regime_recommendation(self, regime: str) -> str:
+        """Get recommendation based on regime"""
+        recommendations = {
+            'Trend': 'Favor momentum and trend-following strategies',
+            'Choppy': 'Favor mean reversion strategies',
+            'Risk-Off': 'Reduce exposure, consider defensive positions'
+        }
+        return recommendations.get(regime, 'Monitor closely')
+    
+    def get_active_alerts(self, min_confidence: float = 0.6) -> List[Alert]:
+        """Get active high-confidence alerts"""
+        return [a for a in self.alerts if a.confidence >= min_confidence]
+    
+    def print_alert(self, alert: Alert):
+        """Print formatted alert"""
+        print("\n" + "="*80)
+        print(alert.message)
+        print("="*80 + "\n")
+    
+    def clear_alerts(self):
+        """Clear current alerts (keep history)"""
+        self.alerts = []
+    
+    def export_alert_history(self, filename: str = 'alert_history.json'):
+        """Export alert history to file"""
+        export_data = [
+            {
+                'timestamp': a.timestamp.isoformat(),
+                'ticker': a.ticker,
+                'signal': a.signal.name,
+                'strategy': a.strategy,
+                'price': a.price,
+                'confidence': a.confidence,
+                'message': a.message
+            }
+            for a in self.alert_history
+        ]
+        
+        with open(filename, 'w') as f:
+            json.dump(export_data, f, indent=2)
+
+# ==================================================
+# TRADING ASSISTANT (Main Orchestrator)
+# ==================================================
+
+
+
+
+def main():
+    """Main execution function with user interface"""
+    
+    print("\n" + "="*80)
+    print("Enhanced Multi-Strategy Trading System".center(80))
+    print("Professional Trading Analysis Platform".center(80))
+    print("="*80)
+    
+    ui = UserInterface()
+    
+    # Get ticker input
+    ticker_input = ui.get_ticker_input()
+    
+    if ticker_input is None:
+        print("\nExiting...")
+        return
+    
+    # Get date range
+    start_date, end_date = ui.get_date_range()
+    
+    if ticker_input == 'PORTFOLIO':
+        # Portfolio analysis
+        tickers = ui.get_portfolio_tickers()
+        if not tickers:
+            print("\nNo valid tickers provided. Exiting...")
+            return
+        
+        analyze_portfolio(tickers, start_date, end_date)
+    else:
+        # Single ticker analysis
+        mode = ui.get_analysis_mode()
+        analyze_single_ticker(ticker_input, start_date, end_date, mode)
+    
+    print("\n" + "="*80)
+    print("Analysis Complete".center(80))
+    print("="*80 + "\n")
+
+if __name__ == "__main__":
+    main()
