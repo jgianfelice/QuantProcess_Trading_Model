@@ -1,0 +1,36 @@
+Failures:
+- This failed because price data schemas change (e.g., missing or renamed columns), causing downstream calculations to break.
+- This failed because regime detection can leak future information via rolling features and ML training on overlapping windows.
+- This failed because transaction costs and slippage are simplified and understate turnover drag during regime shifts.
+- This failed because monthly rebalance timing can misalign with signal generation, creating implicit lookahead.
+- This failed because volatility targeting assumes stable return distributions that collapse in crisis periods.
+- This failed because multi-timeframe alignment down-samples data and drops rows, shrinking effective sample size.
+- This failed because optimization (Markowitz/Risk Parity) becomes unstable with short histories or highly correlated assets.
+- This failed because Monte Carlo resampling assumes IID returns and ignores path-dependent drawdowns.
+- This failed because portfolio constraints (no shorts, full investment) are inconsistently enforced across modules.
+- This failed because yfinance outages/adjustments introduce silent NaNs that propagate into signals.
+
+Reflection:
+
+Most important assumptions:
+- Prices are clean, adjusted, and available without gaps.
+- Regimes are learnable and persist long enough to trade.
+- Volatility estimates are stable and predictive over the rebalance horizon.
+- Correlations are sufficiently stationary for portfolio optimization.
+
+'What Breaks the Strategy?': 
+- Rapid regime flips that increase turnover and costs.
+- Liquidity shocks where volatility targeting forces de-risking at lows.
+- Feature leakage or overfitting in ML regime models.
+- High correlation spikes that defeat diversification.
+
+Times not to be traded:
+- Event-driven markets (earnings clusters, macro announcements) where signals lag.
+- Low-liquidity assets or during market halts.
+- When data quality is degraded or coverage is incomplete.
+
+Effect of institutional contraints:
+- Position limits, liquidity caps, and participation rates would slow rebalances.
+- Compliance would restrict model retraining frequency and feature use.
+- Realistic borrow, financing, and tax treatment would reduce net returns.
+- Governance would require pre-trade risk checks and kill switches.
