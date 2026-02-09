@@ -36,6 +36,7 @@ import warnings
 from datetime import datetime, timedelta
 from typing import Tuple, Dict, List, Optional
 import seaborn as sns
+import json
 
 
 from scipy.optimize import minimize
@@ -246,6 +247,31 @@ class DataManager:
         except:
             return {'name': ticker, 'sector': 'N/A', 'industry': 'N/A', 
                    'market_cap': 'N/A', 'currency': 'USD', 'exchange': 'N/A'}
+    
+    @staticmethod
+    def fetch_multi_timeframe(ticker: str, start_date: str) -> Dict[str, pd.DataFrame]:
+        """Fetch data across multiple timeframes"""
+        data = {}
+        for name, interval in Config.TIMEFRAMES.items():
+            try:
+                raw_data = yf.download(
+                    ticker,
+                    start=start_date,
+                    interval=interval,
+                    auto_adjust=True,
+                    progress=False
+                )
+                
+                if not raw_data.empty and "Close" in raw_data.columns:
+                    prices = pd.DataFrame(raw_data["Close"])
+                    prices.columns = [ticker]
+                    data[name] = prices
+                else:
+                    data[name] = None
+            except Exception as e:
+                print(f"Could not fetch {name} data: {str(e)}")
+                data[name] = None
+        return data
 
 # ==================================================
 # UTILITY FUNCTIONS
@@ -819,23 +845,37 @@ class RegimeAwareAllocator:
         
         final_returns = pd.Series(0.0, index=combined.index)
         
-        # Trend regime: favor momentum and trend following
+        # Trend regime: favor trend following strategies
         trend_mask = regime_aligned == "Trend"
-        if 'MOM' in combined.columns and 'MA' in combined.columns:
-            final_returns[trend_mask] = (
-                0.7 * combined.loc[trend_mask, "MOM"] + 
-                0.3 * combined.loc[trend_mask, "MA"]
-            )
+        if trend_mask.any():
+            # Use MA if available, otherwise use any trend-following strategy
+            if 'MA' in combined.columns:
+                final_returns[trend_mask] = combined.loc[trend_mask, "MA"]
+            elif 'MOM' in combined.columns:
+                final_returns[trend_mask] = combined.loc[trend_mask, "MOM"]
+            else:
+                # Average all available strategies
+                final_returns[trend_mask] = combined.loc[trend_mask].mean(axis=1)
         
-        # Choppy regime: favor mean reversion
+        # Choppy regime: favor mean reversion strategies
         choppy_mask = regime_aligned == "Choppy"
-        if 'Z' in combined.columns and 'MOM' in combined.columns:
-            final_returns[choppy_mask] = (
-                0.6 * combined.loc[choppy_mask, "Z"] + 
-                0.4 * combined.loc[choppy_mask, "MOM"]
-            )
+        if choppy_mask.any():
+            # Prefer mean reversion strategies
+            mean_rev_strategies = []
+            if 'Z' in combined.columns:
+                mean_rev_strategies.append('Z')
+            if 'RSI' in combined.columns:
+                mean_rev_strategies.append('RSI')
+            if 'BB' in combined.columns:
+                mean_rev_strategies.append('BB')
+            
+            if mean_rev_strategies:
+                final_returns[choppy_mask] = combined.loc[choppy_mask, mean_rev_strategies].mean(axis=1)
+            else:
+                # Use all available strategies
+                final_returns[choppy_mask] = combined.loc[choppy_mask].mean(axis=1)
         
-        # Risk-off regime: reduce exposure
+        # Risk-off regime: reduce exposure (stay flat)
         risk_off_mask = regime_aligned == "Risk-Off"
         final_returns[risk_off_mask] = 0.0
         
@@ -1843,39 +1883,53 @@ class MLRegimePredictor:
     def train(self, price: pd.Series, returns: pd.Series, 
              regime: pd.Series) -> float:
         """Train the ML model"""
-        features = self.create_features(price, returns)
-        
-        # Align data
-        aligned_data = pd.concat([features, regime], axis=1, join='inner')
-        aligned_data = aligned_data.dropna()
-        
-        if len(aligned_data) < Config.ML_TRAIN_SIZE:
+        try:
+            features = self.create_features(price, returns)
+            
+            # Align data
+            aligned_data = pd.concat([features, regime], axis=1, join='inner')
+            aligned_data = aligned_data.dropna()
+            
+            if len(aligned_data) < Config.ML_TRAIN_SIZE:
+                print(f"  Insufficient data for ML training: {len(aligned_data)} samples (need {Config.ML_TRAIN_SIZE})")
+                return 0.0
+            
+            X = aligned_data.iloc[:, :-1]
+            y = aligned_data.iloc[:, -1]
+            
+            # Encode regime labels
+            regime_map = {'Risk-Off': 0, 'Choppy': 1, 'Trend': 2}
+            y_encoded = y.map(regime_map)
+            
+            # Check if we have any NaN after encoding
+            if y_encoded.isna().any():
+                print(f"  Warning: Unknown regime labels found")
+                return 0.0
+            
+            # Train/test split (time series)
+            split_idx = int(len(X) * 0.8)
+            if split_idx < 100:  # Need minimum train size
+                print(f"  Insufficient data for train/test split")
+                return 0.0
+                
+            X_train, X_test = X[:split_idx], X[split_idx:]
+            y_train, y_test = y_encoded[:split_idx], y_encoded[split_idx:]
+            
+            # Scale features
+            X_train_scaled = self.scaler.fit_transform(X_train)
+            X_test_scaled = self.scaler.transform(X_test)
+            
+            # Train model
+            self.model.fit(X_train_scaled, y_train)
+            self.is_trained = True
+            
+            # Calculate accuracy
+            accuracy = self.model.score(X_test_scaled, y_test)
+            
+            return accuracy
+        except Exception as e:
+            print(f"  ML training error: {str(e)}")
             return 0.0
-        
-        X = aligned_data.iloc[:, :-1]
-        y = aligned_data.iloc[:, -1]
-        
-        # Encode regime labels
-        regime_map = {'Risk-Off': 0, 'Choppy': 1, 'Trend': 2}
-        y_encoded = y.map(regime_map)
-        
-        # Train/test split (time series)
-        split_idx = int(len(X) * 0.8)
-        X_train, X_test = X[:split_idx], X[split_idx:]
-        y_train, y_test = y_encoded[:split_idx], y_encoded[split_idx:]
-        
-        # Scale features
-        X_train_scaled = self.scaler.fit_transform(X_train)
-        X_test_scaled = self.scaler.transform(X_test)
-        
-        # Train model
-        self.model.fit(X_train_scaled, y_train)
-        self.is_trained = True
-        
-        # Calculate accuracy
-        accuracy = self.model.score(X_test_scaled, y_test)
-        
-        return accuracy
     
     def predict_next_regime(self, price: pd.Series, returns: pd.Series) -> Tuple[str, float]:
         """Predict next regime with confidence"""
