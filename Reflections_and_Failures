@@ -1,4 +1,5 @@
 Failures:
+
 - This failed because price data schemas change (e.g., missing or renamed columns), causing downstream calculations to break.
 - This failed because regime detection can leak future information via rolling features and ML training on overlapping windows.
 - This failed because transaction costs and slippage are simplified and understate turnover drag during regime shifts.
