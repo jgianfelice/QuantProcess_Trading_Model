@@ -91,7 +91,8 @@ transaction_cost   = input.float(0.10,"Transaction Cost (bps)",       minval=0.0
 grp_disp       = "Display"
 show_signals   = input.bool(true, "Show Buy/Sell Signal Arrows",  group=grp_disp)
 show_table     = input.bool(true, "Show Performance Table",        group=grp_disp)
-show_consensus = input.bool(true, "Show Consensus Signal Label",   group=grp_disp)
+show_consensus = input.bool(true,  "Show Consensus Signal Label",   group=grp_disp)
+show_dd_labels = input.bool(false, "Show Drawdown Labels on Chart", group=grp_disp)
 
 
 // ============================================================
@@ -467,13 +468,19 @@ if show_table and barstate.islast
 float current_dd          = (equity - peak_equity) / peak_equity
 float drawdown_alert_level = drawdown_alert_pct / 100.0
 
+// ============================================================
+// ── DRAWDOWN ALERT ───────────────────────────────────────────
+// NOTE: alertcondition() message must be a const string in v6.
+// Dynamic values (regime, RSI, Z-score) cannot be concatenated
+// in here — use the visual label below for real-time values.
+// ============================================================
+
 alertcondition(
      current_dd <= -drawdown_alert_level,
      title   = "Drawdown Alert",
-     message = "⚠️ DRAWDOWN ALERT: {{ticker}} strategy drawdown exceeded " +
-               str.tostring(drawdown_alert_pct) + "%. Consider reducing position size.")
+     message = "⚠️ DRAWDOWN ALERT: {{ticker}} @ {{close}} — Strategy drawdown exceeded threshold. Check chart for current drawdown %. Consider reducing position size.")
 
-if current_dd <= -drawdown_alert_level
+if show_dd_labels and current_dd <= -drawdown_alert_level
     label.new(
          bar_index,
          low * 0.99,
@@ -486,24 +493,44 @@ if current_dd <= -drawdown_alert_level
 
 // ============================================================
 // ── ALERT CONDITIONS ─────────────────────────────────────────
+// v6 REQUIREMENT: alertcondition() message must be a const
+// string — no runtime concatenation allowed. Dynamic values
+// such as regime, RSI and Z-score are shown on the chart via
+// labels and the performance table instead.
+// TradingView built-in placeholders ({{ticker}}, {{close}},
+// {{time}}) ARE allowed as they are resolved by the platform.
 // ============================================================
 
-alertcondition(combined_long,  title="BUY Signal",
-     message="🟢 BUY — {{ticker}} @ {{close}}  |  Regime: " + regime_label)
-alertcondition(combined_short, title="SELL Signal",
-     message="🔴 SELL — {{ticker}} @ {{close}}  |  Regime: " + regime_label)
-alertcondition(ma_buy,   title="MA Crossover BUY",       message="MA BUY — {{ticker}}")
-alertcondition(ma_sell,  title="MA Crossover SELL",      message="MA SELL — {{ticker}}")
-alertcondition(rsi_buy,  title="RSI Oversold BUY",
-     message="RSI BUY — {{ticker}} RSI: "  + str.tostring(math.round(rsi_value, 1)))
-alertcondition(rsi_sell, title="RSI Overbought SELL",
-     message="RSI SELL — {{ticker}} RSI: " + str.tostring(math.round(rsi_value, 1)))
-alertcondition(bb_buy,   title="BB Lower-Band BUY",      message="BB BUY — {{ticker}}")
-alertcondition(bb_sell,  title="BB Mid-Band SELL",       message="BB SELL — {{ticker}}")
-alertcondition(mr_buy,   title="Z-Score MR BUY",
-     message="MR BUY — {{ticker}} Z: "    + str.tostring(math.round(zscore, 2)))
-alertcondition(mr_sell,  title="Z-Score MR SELL",
-     message="MR SELL — {{ticker}} Z: "   + str.tostring(math.round(zscore, 2)))
+alertcondition(combined_long,
+     title   = "BUY Signal",
+     message = "🟢 BUY — {{ticker}} @ {{close}} ({{time}}) — Check chart for active regime and strategy details.")
+alertcondition(combined_short,
+     title   = "SELL Signal",
+     message = "🔴 SELL — {{ticker}} @ {{close}} ({{time}}) — Check chart for active regime and strategy details.")
+alertcondition(ma_buy,
+     title   = "MA Crossover BUY",
+     message = "MA BUY — {{ticker}} @ {{close}} — Fast MA crossed above Slow MA.")
+alertcondition(ma_sell,
+     title   = "MA Crossover SELL",
+     message = "MA SELL — {{ticker}} @ {{close}} — Fast MA crossed below Slow MA.")
+alertcondition(rsi_buy,
+     title   = "RSI Oversold BUY",
+     message = "RSI BUY — {{ticker}} @ {{close}} — RSI entered oversold territory. Check chart for current RSI value.")
+alertcondition(rsi_sell,
+     title   = "RSI Overbought SELL",
+     message = "RSI SELL — {{ticker}} @ {{close}} — RSI entered overbought territory. Check chart for current RSI value.")
+alertcondition(bb_buy,
+     title   = "BB Lower-Band BUY",
+     message = "BB BUY — {{ticker}} @ {{close}} — Price touched lower Bollinger Band.")
+alertcondition(bb_sell,
+     title   = "BB Mid-Band SELL",
+     message = "BB SELL — {{ticker}} @ {{close}} — Price crossed above Bollinger mid-band.")
+alertcondition(mr_buy,
+     title   = "Z-Score MR BUY",
+     message = "MR BUY — {{ticker}} @ {{close}} — Z-Score crossed below entry threshold. Check chart for current Z value.")
+alertcondition(mr_sell,
+     title   = "Z-Score MR SELL",
+     message = "MR SELL — {{ticker}} @ {{close}} — Z-Score crossed above exit threshold. Check chart for current Z value.")
 
 
 // ============================================================
