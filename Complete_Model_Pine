@@ -1,6 +1,6 @@
 // ============================================================
-// MULTI-STRATEGY TRADING SYSTEM — Pine Script v6
-// Converted from Python · Updated from v5 → v6
+// MULTI-STRATEGY TRADING SYSTEM — COMPLETE (All-in-One) v6
+// Converted from Python · Single unified script
 //
 // INCLUDED FEATURES:
 //   ✅ Moving Average Crossover Strategy (MA)
@@ -14,37 +14,25 @@
 //   ✅ Drawdown Alert
 //   ✅ Performance Metrics Table (Sharpe, Win Rate, Max DD, CAGR)
 //   ✅ Full Visualizations (price, RSI, Bollinger Bands, regime)
+//   ✅ RSI & Z-Score Panel (toggle on/off in settings)
 //
 // NOT PORTABLE TO PINE SCRIPT (Python-only features):
-//   ❌ Machine Learning Regime Predictor (GradientBoostingClassifier)
-//   ❌ Portfolio Optimization (Markowitz / Risk Parity via scipy)
-//   ❌ Monte Carlo Simulation (requires multi-run loops)
-//   ❌ Walk-Forward Analysis (requires dynamic date windowing)
-//   ❌ Multi-ticker Portfolio Mode (single symbol per chart)
-//   ❌ Alert export to JSON / file I/O
-//   ❌ Parameter optimizer (grid search across symbol history)
-//   ❌ Kelly Criterion (requires external win/loss tracking)
+//   ❌ Machine Learning Regime Predictor
+//   ❌ Portfolio Optimization (Markowitz / Risk Parity)
+//   ❌ Monte Carlo Simulation
+//   ❌ Walk-Forward Analysis
+//   ❌ Multi-ticker Portfolio Mode
 //
 // USAGE:
 //   1. Open TradingView → Pine Script Editor
 //   2. Paste this entire script
 //   3. Click "Add to chart"
-//   4. Adjust inputs in the Settings panel on the right
-//   5. Add companion RSI/Z-Score panel as a separate indicator
-//
-// v6 MIGRATION NOTES (changes from v5):
-//   • //@version=6
-//   • Strict boolean types: int/float no longer auto-cast to bool
-//   • Boolean values cannot be na — always true or false
-//   • Integer division now returns float (5/2 = 2.5); int() used where needed
-//   • Explicit type annotations on all function parameters and return values
-//   • na cannot be passed to unique-type parameters (plot style, position, etc.)
-//   • Conditional expressions that return unique types must have else branches
-//   • All var-declared variables now require explicit type annotations
+//   4. Adjust all settings in the ⚙️ Settings panel
+//   5. All features are in ONE script — no need for separate panels
 // ============================================================
 
 //@version=6
-indicator(title="Multi-Strategy Trading System", shorttitle="MSTS", overlay=true, max_bars_back=500)
+indicator(title="Multi-Strategy Trading System (Complete)", shorttitle="MSTS Complete", overlay=true, max_bars_back=500)
 
 
 // ============================================================
@@ -89,28 +77,25 @@ transaction_cost   = input.float(0.10,"Transaction Cost (bps)",       minval=0.0
 
 // --- Display ---
 grp_disp       = "Display"
-show_signals   = input.bool(true, "Show Buy/Sell Signal Arrows",  group=grp_disp)
-show_table     = input.bool(true, "Show Performance Table",        group=grp_disp)
+show_signals   = input.bool(true,  "Show Buy/Sell Signal Arrows",  group=grp_disp)
+show_table     = input.bool(true,  "Show Performance Table",        group=grp_disp)
 show_consensus = input.bool(true,  "Show Consensus Signal Label",   group=grp_disp)
 show_dd_labels = input.bool(false, "Show Drawdown Labels on Chart", group=grp_disp)
+show_rsi_panel = input.bool(true,  "Show RSI & Z-Score Info",       group=grp_disp, tooltip="Displays RSI and Z-Score values in a small info box")
 
 
 // ============================================================
 // ── UTILITY FUNCTIONS ────────────────────────────────────────
-// v6: Explicit type annotations required on parameters
 // ============================================================
 
-// Safe division — avoids divide-by-zero
 safe_div(float num, float den, float fallback) =>
     den == 0.0 or na(den) ? fallback : num / den
 
-// Rolling Z-Score of a series
 f_zscore(float src, int length) =>
     float m = ta.sma(src, length)
     float s = ta.stdev(src, length)
     safe_div(src - m, s, 0.0)
 
-// RSI — manual implementation matching Python compute_rsi()
 f_rsi(float src, int length) =>
     float delta    = src - src[1]
     float gain     = delta > 0.0 ? delta : 0.0
@@ -120,11 +105,9 @@ f_rsi(float src, int length) =>
     float rs       = safe_div(avg_gain, avg_loss, 100.0)
     100.0 - 100.0 / (1.0 + rs)
 
-// Annualised realised volatility
 f_realised_vol(float ret, int length) =>
     ta.stdev(ret, length) * math.sqrt(252.0)
 
-// Daily return — matches Python pct_change()
 float daily_ret = (close - close[1]) / close[1]
 
 
@@ -135,7 +118,6 @@ float daily_ret = (close - close[1]) / close[1]
 float ma_fast_line = ta.sma(close, ma_fast)
 float ma_slow_line = ta.sma(close, ma_slow)
 
-// v6: Explicit int comparison — avoids implicit float-to-bool cast
 int ma_signal = ma_fast_line > ma_slow_line ? 1 : 0
 
 bool ma_buy  = ma_signal == 1 and ma_signal[1] == 0
@@ -147,12 +129,10 @@ plot(show_ma ? ma_slow_line : na, title="MA Slow",  color=color.new(color.blue, 
 
 // ============================================================
 // ── MEAN REVERSION / Z-SCORE STRATEGY ───────────────────────
-// v6: var variables require explicit type annotation
 // ============================================================
 
 float zscore = f_zscore(close, zscore_window)
 
-// Stateful signal — persists across bars (mirrors Python ffill logic)
 var int mr_signal = 0
 if zscore < zscore_entry
     mr_signal := 1
@@ -197,7 +177,6 @@ else if close > bb_mid
 bool bb_buy  = bb_signal == 1 and bb_signal[1] == 0
 bool bb_sell = bb_signal == 0 and bb_signal[1] == 1
 
-// v6: plot() requires a concrete style — na not accepted for style parameter
 plot_bb_upper = plot(show_bb ? bb_upper : na, title="BB Upper", color=color.new(color.red,   60), linewidth=1)
 plot_bb_lower = plot(show_bb ? bb_lower : na, title="BB Lower", color=color.new(color.green, 60), linewidth=1)
 plot(show_bb ? bb_mid : na, title="BB Mid", color=color.new(color.gray, 40), linewidth=1, style=plot.style_circles)
@@ -206,24 +185,19 @@ fill(plot_bb_upper, plot_bb_lower, color=color.new(color.blue, 92), title="BB Fi
 
 // ============================================================
 // ── REGIME DETECTION ─────────────────────────────────────────
-// Mirrors Python RegimeDetector: trend filter + vol filter + hysteresis
-// v6: All bool values must be true/false — never na
 // ============================================================
 
 float ma200        = ta.sma(close, 200)
 float realised_vol = f_realised_vol(daily_ret, vol_lookback)
 
-// v6: Explicit bool — no implicit numeric-to-bool cast
 bool above_ma  = close > ma200
 bool low_vol   = realised_vol < vol_threshold
 
-// Raw regime: 2=Trend, 1=Choppy, 0=Risk-Off
 int raw_regime_num =
      above_ma and low_vol        ? 2 :
      above_ma and not low_vol    ? 1 :
      0
 
-// Hysteresis filter — mirrors Python _apply_hysteresis()
 var int current_regime = 2
 var int confirm_count  = 0
 
@@ -235,13 +209,11 @@ else
         current_regime := raw_regime_num
         confirm_count  := 0
 
-// Human-readable regime label
 string regime_label =
      current_regime == 2 ? "Trend" :
      current_regime == 1 ? "Choppy" :
      "Risk-Off"
 
-// Regime background colour
 color regime_color =
      current_regime == 2 ? color.new(color.green,  90) :
      current_regime == 1 ? color.new(color.orange, 90) :
@@ -252,10 +224,8 @@ bgcolor(show_regime_bg ? regime_color : na, title="Regime Background")
 
 // ============================================================
 // ── REGIME-AWARE CONSENSUS SIGNAL ────────────────────────────
-// Mirrors Python RegimeAwareAllocator — weights strategies by regime
 // ============================================================
 
-// Weighted vote: Trend favours MA (trend-following), Choppy favours MR/RSI/BB
 float trend_vote = ma_signal * 2.0
 float mr_vote    = float(mr_signal)
 float rsi_vote   = float(rsi_signal)
@@ -263,18 +233,16 @@ float bb_vote    = float(bb_signal)
 
 float consensus_score = 0.0
 
-if current_regime == 2      // Trend
+if current_regime == 2
     consensus_score := trend_vote + 0.5 * mr_vote + 0.5 * rsi_vote + 0.5 * bb_vote
-else if current_regime == 1 // Choppy
+else if current_regime == 1
     consensus_score := 0.5 * trend_vote + mr_vote + rsi_vote + bb_vote
-else                         // Risk-Off — always flat
+else
     consensus_score := 0.0
 
-// Normalise to [-1, +1]
 float max_score  = current_regime == 2 ? 3.5 : current_regime == 1 ? 3.5 : 1.0
 float norm_score = safe_div(consensus_score, max_score, 0.0)
 
-// Classify consensus — v6: string conditionals must have explicit else
 string consensus_str =
      current_regime == 0  ? "FLAT (Risk-Off)" :
      norm_score >= 0.7    ? "STRONG BUY"       :
@@ -291,7 +259,6 @@ color consensus_color =
      norm_score >= -0.7   ? color.new(color.red,    0)    :
      color.new(color.maroon, 0)
 
-// Consensus label on last bar
 if show_consensus and barstate.islast
     label.new(
          bar_index, high * 1.01,
@@ -304,11 +271,9 @@ if show_consensus and barstate.islast
 
 // ============================================================
 // ── COMBINED BUY / SELL SIGNAL ARROWS ───────────────────────
-// Only fire in non-Risk-Off regimes
-// v6: bool conditions must be strictly boolean
 // ============================================================
 
-bool in_risk_off   = current_regime == 0
+bool in_risk_off    = current_regime == 0
 bool combined_long  = (ma_buy or mr_buy or rsi_buy or bb_buy)    and not in_risk_off
 bool combined_short = (ma_sell or mr_sell or rsi_sell or bb_sell) and not in_risk_off
 
@@ -333,9 +298,6 @@ plotshape(show_signals and combined_short,
 
 // ============================================================
 // ── PERFORMANCE METRICS TABLE ────────────────────────────────
-// Mirrors Python PerformanceAnalytics: CAGR, Sharpe, Max DD, Win Rate
-// Computed on the full chart history using running accumulators
-// v6: All var variables carry explicit type annotations
 // ============================================================
 
 var float equity      = 1.0
@@ -346,7 +308,6 @@ var int   win_bars    = 0
 var float sum_ret     = 0.0
 var float sum_ret2    = 0.0
 
-// v6: No implicit int-to-bool — compare explicitly
 float tc_cost  = transaction_cost / 10000.0
 int   cur_pos  = norm_score > 0.3 and current_regime != 0 ? 1 : 0
 int   prev_pos = norm_score[1] > 0.3 and current_regime[1] != 0 ? 1 : 0
@@ -364,8 +325,6 @@ if not na(strat_ret)
     sum_ret     := sum_ret  + strat_ret
     sum_ret2    := sum_ret2 + strat_ret * strat_ret
 
-// Compute metrics on last bar only
-// v6: Variables used in conditional scopes still need to be declared outside
 float cagr     = 0.0
 float sharpe   = 0.0
 float win_rate = 0.0
@@ -379,8 +338,6 @@ if barstate.islast and total_bars > 1
     sharpe    := safe_div(mean_r, std_r, 0.0) * math.sqrt(252.0)
     win_rate  := safe_div(float(win_bars), float(total_bars), 0.0)
 
-// Render table on last bar
-// v6: table must be created outside barstate.islast scope with var
 var table perf_table = table.new(
      position.top_right, columns=2, rows=8,
      bgcolor      = color.new(color.black, 70),
@@ -390,7 +347,6 @@ var table perf_table = table.new(
      frame_width  = 1)
 
 if show_table and barstate.islast
-    // Header row
     table.cell(perf_table, 0, 0, "📊 STRATEGY METRICS",
          text_color  = color.white,
          text_size   = size.small,
@@ -402,7 +358,6 @@ if show_table and barstate.islast
          bgcolor     = color.new(color.navy, 40),
          text_halign = text.align_center)
 
-    // CAGR
     table.cell(perf_table, 0, 1, "CAGR",
          text_color = color.silver, text_size = size.small)
     table.cell(perf_table, 1, 1,
@@ -410,7 +365,6 @@ if show_table and barstate.islast
          text_color = cagr >= 0.0 ? color.lime : color.red,
          text_size  = size.small)
 
-    // Sharpe
     table.cell(perf_table, 0, 2, "Sharpe",
          text_color = color.silver, text_size = size.small)
     table.cell(perf_table, 1, 2,
@@ -418,14 +372,12 @@ if show_table and barstate.islast
          text_color = sharpe >= 1.0 ? color.lime : sharpe >= 0.0 ? color.yellow : color.red,
          text_size  = size.small)
 
-    // Max Drawdown
     table.cell(perf_table, 0, 3, "Max Drawdown",
          text_color = color.silver, text_size = size.small)
     table.cell(perf_table, 1, 3,
          str.tostring(math.round(max_dd * 100.0, 2)) + "%",
          text_color = color.red, text_size = size.small)
 
-    // Win Rate
     table.cell(perf_table, 0, 4, "Win Rate",
          text_color = color.silver, text_size = size.small)
     table.cell(perf_table, 1, 4,
@@ -433,7 +385,6 @@ if show_table and barstate.islast
          text_color = win_rate >= 0.5 ? color.lime : color.orange,
          text_size  = size.small)
 
-    // Running equity
     table.cell(perf_table, 0, 5, "Equity (×1)",
          text_color = color.silver, text_size = size.small)
     table.cell(perf_table, 1, 5,
@@ -441,7 +392,6 @@ if show_table and barstate.islast
          text_color = equity >= 1.0 ? color.lime : color.red,
          text_size  = size.small)
 
-    // Active strategy signals
     string active_strats =
          (ma_signal  == 1 ? "MA "  : "") +
          (mr_signal  == 1 ? "MR "  : "") +
@@ -453,7 +403,6 @@ if show_table and barstate.islast
          str.length(active_strats) == 0 ? "NONE (Flat)" : active_strats,
          text_color = color.aqua, text_size = size.small)
 
-    // Consensus
     table.cell(perf_table, 0, 7, "Consensus",
          text_color = color.silver, text_size = size.small)
     table.cell(perf_table, 1, 7, consensus_str,
@@ -461,19 +410,66 @@ if show_table and barstate.islast
 
 
 // ============================================================
+// ── RSI & Z-SCORE INFO BOX ───────────────────────────────────
+// Shows RSI and Z-Score states in a compact info panel
+// ============================================================
+
+// Calculate display states outside the if block (v6 requirement)
+string rsi_state = rsi_value < float(rsi_oversold) ? "OVERSOLD" : rsi_value > float(rsi_overbought) ? "OVERBOUGHT" : "NEUTRAL"
+color  rsi_color = rsi_value < float(rsi_oversold) ? color.lime : rsi_value > float(rsi_overbought) ? color.red : color.orange
+
+string z_state = zscore < -2.0 ? "EXT OVERSOLD" : zscore < -1.0 ? "OVERSOLD" : zscore > 2.0 ? "EXT OVERBOUGHT" : zscore > 1.0 ? "OVERBOUGHT" : "NORMAL"
+color  z_color = zscore < -1.0 ? color.lime : zscore > 1.0 ? color.red : color.orange
+
+bool rsi_in_long = rsi_signal == 1
+bool z_in_long   = mr_signal  == 1
+string sig_str = rsi_in_long and z_in_long ? "RSI + Z LONG" : rsi_in_long ? "RSI LONG" : z_in_long ? "Z LONG" : "FLAT"
+color  sig_col = (rsi_in_long or z_in_long) ? color.lime : color.gray
+
+var table rsi_table = table.new(
+     position.bottom_right, columns=2, rows=4,
+     bgcolor      = color.new(color.black, 75),
+     border_color = color.new(color.white, 60),
+     border_width = 1,
+     frame_color  = color.new(color.white, 40),
+     frame_width  = 1)
+
+if show_rsi_panel and barstate.islast
+    table.cell(rsi_table, 0, 0, "Indicator",
+         text_color  = color.white,
+         text_size   = size.tiny,
+         bgcolor     = color.new(color.navy, 40),
+         text_halign = text.align_center)
+    table.cell(rsi_table, 1, 0, "Value / State",
+         text_color  = color.white,
+         text_size   = size.tiny,
+         bgcolor     = color.new(color.navy, 40),
+         text_halign = text.align_center)
+
+    table.cell(rsi_table, 0, 1, "RSI (" + str.tostring(rsi_period) + ")",
+         text_color = color.silver, text_size = size.tiny)
+    table.cell(rsi_table, 1, 1,
+         str.tostring(math.round(rsi_value, 1)) + "  " + rsi_state,
+         text_color = rsi_color, text_size = size.tiny)
+
+    table.cell(rsi_table, 0, 2, "Z-Score (" + str.tostring(zscore_window) + ")",
+         text_color = color.silver, text_size = size.tiny)
+    table.cell(rsi_table, 1, 2,
+         str.tostring(math.round(zscore, 2)) + "  " + z_state,
+         text_color = z_color, text_size = size.tiny)
+
+    table.cell(rsi_table, 0, 3, "Active Signal",
+         text_color = color.silver, text_size = size.tiny)
+    table.cell(rsi_table, 1, 3, sig_str,
+         text_color = sig_col, text_size = size.tiny)
+
+
+// ============================================================
 // ── DRAWDOWN ALERT ───────────────────────────────────────────
-// Mirrors Python AlertSystem.check_drawdown_alert()
 // ============================================================
 
 float current_dd          = (equity - peak_equity) / peak_equity
 float drawdown_alert_level = drawdown_alert_pct / 100.0
-
-// ============================================================
-// ── DRAWDOWN ALERT ───────────────────────────────────────────
-// NOTE: alertcondition() message must be a const string in v6.
-// Dynamic values (regime, RSI, Z-score) cannot be concatenated
-// in here — use the visual label below for real-time values.
-// ============================================================
 
 alertcondition(
      current_dd <= -drawdown_alert_level,
@@ -493,12 +489,6 @@ if show_dd_labels and current_dd <= -drawdown_alert_level
 
 // ============================================================
 // ── ALERT CONDITIONS ─────────────────────────────────────────
-// v6 REQUIREMENT: alertcondition() message must be a const
-// string — no runtime concatenation allowed. Dynamic values
-// such as regime, RSI and Z-score are shown on the chart via
-// labels and the performance table instead.
-// TradingView built-in placeholders ({{ticker}}, {{close}},
-// {{time}}) ARE allowed as they are resolved by the platform.
 // ============================================================
 
 alertcondition(combined_long,
@@ -534,7 +524,5 @@ alertcondition(mr_sell,
 
 
 // ============================================================
-// END OF SCRIPT
-// Add the companion "MSTS RSI/Z-Score Panel" as a second
-// indicator in a separate pane below this chart.
+// END OF SCRIPT — All features combined in one file
 // ============================================================
