@@ -1,5 +1,6 @@
 # QuantProcess_Trading_Model
 Complete trading model created by Justin Gianfelice. Output and indicators received are based on stock ticker input and choice of trading strategy. Two versions are attached, one being the original Python code and the second being an optimized version in Pine script, ready to be implemented into a trading facilitator such as TradingView. 
+
 Strategy logic
 - Multi-strategy signals (MA, Mean Reversion, RSI, BB, Momentum)
 - Regime-aware allocation with volatility targeting
