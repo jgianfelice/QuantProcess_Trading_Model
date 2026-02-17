@@ -1,5 +1,5 @@
 # QuantProcess_Trading_Model
-Complete trading model created by Justin Gianfelice. Output and indicators received are based on stock ticker input and choice of trading strategy.
+Complete trading model created by Justin Gianfelice. Output and indicators received are based on stock ticker input and choice of trading strategy. Complete_Model_Python is the original code created in Python, Complete_Model_Pine is the model optimized in Pine to be directly implemented into trading facilitators such as TradingView.
 
 Strategy logic
 - Multi-strategy signals (MA, Mean Reversion, RSI, BB, Momentum)
