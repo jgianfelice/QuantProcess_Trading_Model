@@ -1,528 +1,345 @@
-// ============================================================
-// MULTI-STRATEGY TRADING SYSTEM — COMPLETE (All-in-One) v6
-// Converted from Python · Single unified script
-//
-// INCLUDED FEATURES:
-//   ✅ Moving Average Crossover Strategy (MA)
-//   ✅ Mean Reversion / Z-Score Strategy
-//   ✅ RSI Strategy
-//   ✅ Bollinger Bands Strategy
-//   ✅ Market Regime Detection (Trend / Choppy / Risk-Off)
-//   ✅ Regime-Aware Signal Weighting
-//   ✅ Multi-Strategy Consensus Signal
-//   ✅ Volatility Targeting (vol scaling)
-//   ✅ Drawdown Alert
-//   ✅ Performance Metrics Table (Sharpe, Win Rate, Max DD, CAGR)
-//   ✅ Full Visualizations (price, RSI, Bollinger Bands, regime)
-//   ✅ RSI & Z-Score Panel (toggle on/off in settings)
-//
-// NOT PORTABLE TO PINE SCRIPT (Python-only features):
-//   ❌ Machine Learning Regime Predictor
-//   ❌ Portfolio Optimization (Markowitz / Risk Parity)
-//   ❌ Monte Carlo Simulation
-//   ❌ Walk-Forward Analysis
-//   ❌ Multi-ticker Portfolio Mode
-//
-// USAGE:
-//   1. Open TradingView → Pine Script Editor
-//   2. Paste this entire script
-//   3. Click "Add to chart"
-//   4. Adjust all settings in the ⚙️ Settings panel
-//   5. All features are in ONE script — no need for separate panels
-// ============================================================
-
 //@version=6
-indicator(title="Multi-Strategy Trading System (Complete)", shorttitle="MSTS Complete", overlay=true, max_bars_back=500)
+strategy('Institutional Quant Strategy', 
+         overlay=true, 
+         default_qty_type=strategy.percent_of_equity, 
+         default_qty_value=100, 
+         commission_type=strategy.commission.percent, 
+         commission_value=0.1,
+         max_bars_back=500)
 
+// ============================================================================
+// PROFESSIONAL CLEAN VERSION - OPTIMIZED FOR READABILITY
+// ============================================================================
 
-// ============================================================
-// ── INPUTS ──────────────────────────────────────────────────
-// ============================================================
+// =================================
+// USER INPUTS
+// =================================
 
-// --- Moving Average ---
-grp_ma         = "Moving Average Strategy"
-ma_fast        = input.int(50,    "Fast MA Period",          minval=5,    maxval=200,  group=grp_ma)
-ma_slow        = input.int(200,   "Slow MA Period",          minval=20,   maxval=500,  group=grp_ma)
-show_ma        = input.bool(true, "Show MAs on Chart",                                group=grp_ma)
+// Regime Detection
+vol_lookback   = input.int(20, 'Volatility Period', minval=5, maxval=100, group='Regime Detection')
+trend_strength = input.int(25, 'Trend Strength (ADX)', minval=15, maxval=40, group='Regime Detection')
+regime_confirm = input.int(3, 'Confirmation Days', minval=1, maxval=10, group='Regime Detection')
 
-// --- Mean Reversion / Z-Score ---
-grp_mr         = "Mean Reversion (Z-Score) Strategy"
-zscore_window  = input.int(20,    "Z-Score Window",          minval=5,    maxval=100,  group=grp_mr)
-zscore_entry   = input.float(-1.0,"Entry Threshold (z)",     minval=-3.0, maxval=0.0,  step=0.1, group=grp_mr)
-zscore_exit    = input.float(0.0, "Exit Threshold (z)",      minval=-1.0, maxval=2.0,  step=0.1, group=grp_mr)
+// Signal Thresholds
+trending_buy    = input.float(0.5,  'Buy Threshold',      minval=0,   maxval=2,  step=0.1, group='Signal Thresholds')
+trending_sell   = input.float(-0.5, 'Sell Threshold',     minval=-2,  maxval=0,  step=0.1, group='Signal Thresholds')
+rsi_oversold    = input.int(30,     'RSI Oversold',       minval=10,  maxval=40, group='Signal Thresholds')
+rsi_overbought  = input.int(70,     'RSI Overbought',     minval=60,  maxval=90, group='Signal Thresholds')
 
-// --- RSI ---
-grp_rsi        = "RSI Strategy"
-rsi_period     = input.int(14,    "RSI Period",              minval=2,    maxval=50,   group=grp_rsi)
-rsi_oversold   = input.int(30,    "RSI Oversold Level",      minval=10,   maxval=45,   group=grp_rsi)
-rsi_overbought = input.int(70,    "RSI Overbought Level",    minval=55,   maxval=90,   group=grp_rsi)
+// Risk Management
+use_stops    = input.bool(true,  'Enable Stop Loss',    group='Risk Management')
+stop_loss_pct= input.float(5.0,  'Stop Loss %',         minval=1, maxval=20, step=0.5, group='Risk Management')
+use_trailing = input.bool(true,  'Enable Trailing Stop',group='Risk Management')
+trailing_pct = input.float(10.0, 'Trailing Stop %',     minval=5, maxval=30, step=1,   group='Risk Management')
 
-// --- Bollinger Bands ---
-grp_bb         = "Bollinger Bands Strategy"
-bb_period      = input.int(20,    "BB Period",               minval=5,    maxval=100,  group=grp_bb)
-bb_std         = input.float(2.0, "BB Std Deviations",       minval=0.5,  maxval=4.0,  step=0.1, group=grp_bb)
-show_bb        = input.bool(true, "Show Bollinger Bands",                              group=grp_bb)
+// Display Options
+show_signals   = input.bool(true,  'Show Buy/Sell Signals', group='Display')
+show_regime_bg = input.bool(false, 'Show Regime Background', group='Display')
+show_stats     = input.bool(true,  'Show Statistics Panel',  group='Display')
 
-// --- Regime Detection ---
-grp_reg        = "Regime Detection"
-vol_lookback   = input.int(20,    "Volatility Lookback",     minval=5,    maxval=60,   group=grp_reg)
-vol_threshold  = input.float(0.20,"Vol Threshold (ann.)",    minval=0.05, maxval=0.60, step=0.01, group=grp_reg)
-regime_confirm = input.int(5,     "Regime Confirm Days",     minval=1,    maxval=20,   group=grp_reg)
-show_regime_bg = input.bool(true, "Show Regime Background",                            group=grp_reg)
+// Bollinger Bands (visual only, MSTS-style)
+grp_bb      = 'Bollinger Bands (Visual)'
+bb_period   = input.int(20, 'BB Period',          minval=5,  maxval=100, group=grp_bb)
+bb_std      = input.float(2.0, 'BB Std Dev',      minval=0.5,maxval=4.0, step=0.1, group=grp_bb)
+show_bb     = input.bool(true, 'Show Bollinger Bands',       group=grp_bb)
 
-// --- Risk Management ---
-grp_risk           = "Risk Management"
-drawdown_alert_pct = input.float(5.0, "Drawdown Alert Threshold (%)", minval=1.0, maxval=30.0, step=0.5, group=grp_risk)
-transaction_cost   = input.float(0.10,"Transaction Cost (bps)",       minval=0.0, maxval=50.0, step=0.5, group=grp_risk)
+// =================================
+// REGIME DETECTION
+// =================================
 
-// --- Display ---
-grp_disp       = "Display"
-show_signals   = input.bool(true,  "Show Buy/Sell Signal Arrows",  group=grp_disp)
-show_table     = input.bool(true,  "Show Performance Table",        group=grp_disp)
-show_consensus = input.bool(true,  "Show Consensus Signal Label",   group=grp_disp)
-show_dd_labels = input.bool(false, "Show Drawdown Labels on Chart", group=grp_disp)
-show_rsi_panel = input.bool(true,  "Show RSI & Z-Score Info",       group=grp_disp, tooltip="Displays RSI and Z-Score values in a small info box")
+returns      = math.log(close / close[1])
+realized_vol = ta.stdev(returns, vol_lookback) * math.sqrt(252)
+vol_ma       = ta.sma(realized_vol, 50)
+high_vol     = realized_vol > vol_ma * 1.2
 
+tr               = high - low
+atr              = ta.sma(tr, 14)
+direction_change = math.abs(close - close[1])
+adx_approx       = ta.sma(direction_change, 14) / atr * 100
 
-// ============================================================
-// ── UTILITY FUNCTIONS ────────────────────────────────────────
-// ============================================================
+ma_fast = ta.sma(close, 20)
+ma_slow = ta.sma(close, 50)
+uptrend = ma_fast > ma_slow
 
-safe_div(float num, float den, float fallback) =>
-    den == 0.0 or na(den) ? fallback : num / den
+var string regime      = 'Neutral'
+var int    regime_count= 0
 
-f_zscore(float src, int length) =>
-    float m = ta.sma(src, length)
-    float s = ta.stdev(src, length)
-    safe_div(src - m, s, 0.0)
+is_trending = adx_approx > trend_strength and not high_vol
+is_range    = adx_approx < trend_strength and not high_vol
+is_volatile = high_vol
 
-f_rsi(float src, int length) =>
-    float delta    = src - src[1]
-    float gain     = delta > 0.0 ? delta : 0.0
-    float loss     = delta < 0.0 ? -delta : 0.0
-    float avg_gain = ta.rma(gain, length)
-    float avg_loss = ta.rma(loss, length)
-    float rs       = safe_div(avg_gain, avg_loss, 100.0)
-    100.0 - 100.0 / (1.0 + rs)
+if is_trending
+    if regime != 'Trending'
+        regime_count += 1
+        if regime_count >= regime_confirm
+            regime      := 'Trending'
+            regime_count := 0
+    else
+        regime_count := 0
+else if is_range
+    if regime != 'Range'
+        regime_count += 1
+        if regime_count >= regime_confirm
+            regime      := 'Range'
+            regime_count := 0
+    else
+        regime_count := 0
+else if is_volatile
+    if regime != 'Volatile'
+        regime_count += 1
+        if regime_count >= regime_confirm
+            regime      := 'Volatile'
+            regime_count := 0
+    else
+        regime_count := 0
 
-f_realised_vol(float ret, int length) =>
-    ta.stdev(ret, length) * math.sqrt(252.0)
+// =================================
+// FACTOR CALCULATIONS
+// =================================
 
-float daily_ret = (close - close[1]) / close[1]
+mom_fast      = ta.roc(close, 20)
+mom_slow      = ta.roc(close, 50)
+momentum_raw  = (mom_fast + mom_slow) / 2
+mom_mean      = ta.sma(momentum_raw, 100)
+mom_std       = ta.stdev(momentum_raw, 100)
+momentum_score= (momentum_raw - mom_mean) / mom_std
 
+vol_short = ta.stdev(returns, 20) * math.sqrt(252)
+vol_mean  = ta.sma(vol_short, 100)
+vol_std   = ta.stdev(vol_short, 100)
+vol_score = -(vol_short - vol_mean) / vol_std
 
-// ============================================================
-// ── MOVING AVERAGE STRATEGY ──────────────────────────────────
-// ============================================================
+rsi = ta.rsi(close, 14)
 
-float ma_fast_line = ta.sma(close, ma_fast)
-float ma_slow_line = ta.sma(close, ma_slow)
+// =================================
+// SIGNAL GENERATION
+// =================================
 
-int ma_signal = ma_fast_line > ma_slow_line ? 1 : 0
+var int signal = 0
 
-bool ma_buy  = ma_signal == 1 and ma_signal[1] == 0
-bool ma_sell = ma_signal == 0 and ma_signal[1] == 1
-
-plot(show_ma ? ma_fast_line : na, title="MA Fast", color=color.new(color.orange, 20), linewidth=1)
-plot(show_ma ? ma_slow_line : na, title="MA Slow",  color=color.new(color.blue,   20), linewidth=2)
-
-
-// ============================================================
-// ── MEAN REVERSION / Z-SCORE STRATEGY ───────────────────────
-// ============================================================
-
-float zscore = f_zscore(close, zscore_window)
-
-var int mr_signal = 0
-if zscore < zscore_entry
-    mr_signal := 1
-else if zscore > zscore_exit
-    mr_signal := 0
-
-bool mr_buy  = mr_signal == 1 and mr_signal[1] == 0
-bool mr_sell = mr_signal == 0 and mr_signal[1] == 1
-
-
-// ============================================================
-// ── RSI STRATEGY ─────────────────────────────────────────────
-// ============================================================
-
-float rsi_value = f_rsi(close, rsi_period)
-
-var int rsi_signal = 0
-if rsi_value < rsi_oversold
-    rsi_signal := 1
-else if rsi_value > rsi_overbought
-    rsi_signal := 0
-
-bool rsi_buy  = rsi_signal == 1 and rsi_signal[1] == 0
-bool rsi_sell = rsi_signal == 0 and rsi_signal[1] == 1
-
-
-// ============================================================
-// ── BOLLINGER BANDS STRATEGY ─────────────────────────────────
-// ============================================================
-
-float bb_mid   = ta.sma(close, bb_period)
-float bb_dev   = ta.stdev(close, bb_period)
-float bb_upper = bb_mid + bb_std * bb_dev
-float bb_lower = bb_mid - bb_std * bb_dev
-
-var int bb_signal = 0
-if close < bb_lower
-    bb_signal := 1
-else if close > bb_mid
-    bb_signal := 0
-
-bool bb_buy  = bb_signal == 1 and bb_signal[1] == 0
-bool bb_sell = bb_signal == 0 and bb_signal[1] == 1
-
-plot_bb_upper = plot(show_bb ? bb_upper : na, title="BB Upper", color=color.new(color.red,   60), linewidth=1)
-plot_bb_lower = plot(show_bb ? bb_lower : na, title="BB Lower", color=color.new(color.green, 60), linewidth=1)
-plot(show_bb ? bb_mid : na, title="BB Mid", color=color.new(color.gray, 40), linewidth=1, style=plot.style_circles)
-fill(plot_bb_upper, plot_bb_lower, color=color.new(color.blue, 92), title="BB Fill")
-
-
-// ============================================================
-// ── REGIME DETECTION ─────────────────────────────────────────
-// ============================================================
-
-float ma200        = ta.sma(close, 200)
-float realised_vol = f_realised_vol(daily_ret, vol_lookback)
-
-bool above_ma  = close > ma200
-bool low_vol   = realised_vol < vol_threshold
-
-int raw_regime_num =
-     above_ma and low_vol        ? 2 :
-     above_ma and not low_vol    ? 1 :
-     0
-
-var int current_regime = 2
-var int confirm_count  = 0
-
-if raw_regime_num == current_regime
-    confirm_count := 0
+if regime == 'Trending'
+    combined_score = momentum_score * 0.7 + vol_score * 0.3
+    if combined_score > trending_buy and uptrend
+        signal := 1
+    else if combined_score < trending_sell and not uptrend
+        signal := -1
+    else
+        signal := 0
+else if regime == 'Range'
+    if rsi < rsi_oversold
+        signal := 1
+    else if rsi > rsi_overbought
+        signal := -1
+    else
+        signal := 0
+else if regime == 'Volatile'
+    if momentum_score > 1.5 and uptrend
+        signal := 1
+    else if momentum_score < -1.5 and not uptrend
+        signal := -1
+    else
+        signal := 0
 else
-    confirm_count := confirm_count + 1
-    if confirm_count >= regime_confirm
-        current_regime := raw_regime_num
-        confirm_count  := 0
+    signal := 0
 
-string regime_label =
-     current_regime == 2 ? "Trend" :
-     current_regime == 1 ? "Choppy" :
-     "Risk-Off"
+// =================================
+// POSITION SIZING
+// =================================
 
-color regime_color =
-     current_regime == 2 ? color.new(color.green,  90) :
-     current_regime == 1 ? color.new(color.orange, 90) :
-     color.new(color.red, 90)
+position_qty = regime == 'Volatile' ? 50.0 : 100.0
 
-bgcolor(show_regime_bg ? regime_color : na, title="Regime Background")
+// =================================
+// ENTRY/EXIT LOGIC
+// =================================
 
+longCondition      = signal == 1  and strategy.position_size == 0
+shortCondition     = signal == -1 and strategy.position_size == 0
+exitLongCondition  = signal == -1 and strategy.position_size > 0
+exitShortCondition = signal == 1  and strategy.position_size < 0
 
-// ============================================================
-// ── REGIME-AWARE CONSENSUS SIGNAL ────────────────────────────
-// ============================================================
+if longCondition
+    strategy.entry('Long', strategy.long, qty=position_qty)
 
-float trend_vote = ma_signal * 2.0
-float mr_vote    = float(mr_signal)
-float rsi_vote   = float(rsi_signal)
-float bb_vote    = float(bb_signal)
+if shortCondition
+    strategy.entry('Short', strategy.short, qty=position_qty)
 
-float consensus_score = 0.0
+if exitLongCondition
+    strategy.close('Long')
 
-if current_regime == 2
-    consensus_score := trend_vote + 0.5 * mr_vote + 0.5 * rsi_vote + 0.5 * bb_vote
-else if current_regime == 1
-    consensus_score := 0.5 * trend_vote + mr_vote + rsi_vote + bb_vote
-else
-    consensus_score := 0.0
+if exitShortCondition
+    strategy.close('Short')
 
-float max_score  = current_regime == 2 ? 3.5 : current_regime == 1 ? 3.5 : 1.0
-float norm_score = safe_div(consensus_score, max_score, 0.0)
+// =================================
+// RISK MANAGEMENT
+// =================================
 
-string consensus_str =
-     current_regime == 0  ? "FLAT (Risk-Off)" :
-     norm_score >= 0.7    ? "STRONG BUY"       :
-     norm_score >= 0.3    ? "BUY"               :
-     norm_score >= -0.3   ? "HOLD"              :
-     norm_score >= -0.7   ? "SELL"              :
-     "STRONG SELL"
+if use_stops and strategy.position_size != 0
+    if strategy.position_size > 0
+        strategy.exit('SL', 'Long',  stop=close * (1 - stop_loss_pct/100))
+    else
+        strategy.exit('SL', 'Short', stop=close * (1 + stop_loss_pct/100))
 
-color consensus_color =
-     current_regime == 0  ? color.gray                    :
-     norm_score >= 0.7    ? color.new(color.green,  0)    :
-     norm_score >= 0.3    ? color.new(color.lime,   0)    :
-     norm_score >= -0.3   ? color.new(color.orange, 0)    :
-     norm_score >= -0.7   ? color.new(color.red,    0)    :
-     color.new(color.maroon, 0)
+if use_trailing and strategy.position_size != 0
+    if strategy.position_size > 0
+        strategy.exit('Trail', 'Long',  trail_price=close, trail_offset=close * trailing_pct/100)
+    else
+        strategy.exit('Trail', 'Short', trail_price=close, trail_offset=close * trailing_pct/100)
 
-if show_consensus and barstate.islast
-    label.new(
-         bar_index, high * 1.01,
-         text        = "⬤ " + consensus_str + "\nRegime: " + regime_label,
-         style       = label.style_label_left,
-         color       = color.new(color.black, 80),
-         textcolor   = consensus_color,
-         size        = size.normal)
+// =================================
+// VISUALS: REGIME, BOLLINGER, LABELS
+// =================================
 
+regime_bg_color = show_regime_bg ?
+     (regime == 'Trending' ? color.new(color.green,  90) :
+      regime == 'Range'    ? color.new(color.orange, 90) :
+      regime == 'Volatile' ? color.new(color.red,    90) : na) : na
+bgcolor(regime_bg_color)
 
-// ============================================================
-// ── COMBINED BUY / SELL SIGNAL ARROWS ───────────────────────
-// ============================================================
+bb_mid   = ta.sma(close, bb_period)
+bb_dev   = ta.stdev(close, bb_period)
+bb_upper = bb_mid + bb_std * bb_dev
+bb_lower = bb_mid - bb_std * bb_dev
 
-bool in_risk_off    = current_regime == 0
-bool combined_long  = (ma_buy or mr_buy or rsi_buy or bb_buy)    and not in_risk_off
-bool combined_short = (ma_sell or mr_sell or rsi_sell or bb_sell) and not in_risk_off
+bb_upper_plot = plot(show_bb ? bb_upper : na, title='BB Upper', color=color.new(color.red,   60), linewidth=1)
+bb_lower_plot = plot(show_bb ? bb_lower : na, title='BB Lower', color=color.new(color.green, 60), linewidth=1)
+plot(show_bb ? bb_mid : na, title='BB Mid', color=color.new(color.gray, 40), linewidth=1, style=plot.style_circles)
+fill(bb_upper_plot, bb_lower_plot, color=color.new(color.blue, 92), title='BB Fill')
 
-plotshape(show_signals and combined_long,
-     title     = "BUY Signal",
+buy_signal = longCondition and show_signals
+plotshape(
+     buy_signal,
+     title     = 'BUY',
      style     = shape.labelup,
      location  = location.belowbar,
      color     = color.new(color.green, 0),
-     text      = "BUY",
+     text      = 'BUY',
      textcolor = color.white,
-     size      = size.small)
+     size      = size.small
+)
 
-plotshape(show_signals and combined_short,
-     title     = "SELL Signal",
+sell_signal = shortCondition and show_signals
+plotshape(
+     sell_signal,
+     title     = 'SELL',
      style     = shape.labeldown,
      location  = location.abovebar,
      color     = color.new(color.red, 0),
-     text      = "SELL",
+     text      = 'SELL',
      textcolor = color.white,
-     size      = size.small)
+     size      = size.small
+)
 
+// =================================
+// CONSENSUS LABEL (MSTS-style)
+// =================================
 
-// ============================================================
-// ── PERFORMANCE METRICS TABLE ────────────────────────────────
-// ============================================================
+string consensus_str =
+     signal == 1  and regime == 'Trending' ? 'STRONG BUY'  :
+     signal == 1  and regime == 'Range'    ? 'BUY'         :
+     signal == 1  and regime == 'Volatile' ? 'BUY'         :
+     signal == -1 and regime == 'Trending' ? 'STRONG SELL' :
+     signal == -1 and regime == 'Range'    ? 'SELL'        :
+     signal == -1 and regime == 'Volatile' ? 'SELL'        :
+     'HOLD'
 
-var float equity      = 1.0
-var float peak_equity = 1.0
-var float max_dd      = 0.0
-var int   total_bars  = 0
-var int   win_bars    = 0
-var float sum_ret     = 0.0
-var float sum_ret2    = 0.0
+color consensus_color =
+     consensus_str == 'STRONG BUY'  ? color.new(color.green, 0)  :
+     consensus_str == 'BUY'         ? color.new(color.lime,  0)  :
+     consensus_str == 'HOLD'        ? color.new(color.orange,0)  :
+     consensus_str == 'SELL'        ? color.new(color.red,   0)  :
+     consensus_str == 'STRONG SELL' ? color.new(color.maroon,0)  :
+     color.gray
 
-float tc_cost  = transaction_cost / 10000.0
-int   cur_pos  = norm_score > 0.3 and current_regime != 0 ? 1 : 0
-int   prev_pos = norm_score[1] > 0.3 and current_regime[1] != 0 ? 1 : 0
-
-float strat_ret = float(prev_pos) * daily_ret - math.abs(float(cur_pos - prev_pos)) * tc_cost
-
-if not na(strat_ret)
-    equity      := equity * (1.0 + strat_ret)
-    peak_equity := math.max(peak_equity, equity)
-    float dd     = (equity - peak_equity) / peak_equity
-    max_dd      := math.min(max_dd, dd)
-    total_bars  := total_bars + 1
-    if strat_ret > 0.0
-        win_bars := win_bars + 1
-    sum_ret     := sum_ret  + strat_ret
-    sum_ret2    := sum_ret2 + strat_ret * strat_ret
-
-float cagr     = 0.0
-float sharpe   = 0.0
-float win_rate = 0.0
-
-if barstate.islast and total_bars > 1
-    float trading_years = float(total_bars) / 252.0
-    cagr      := math.pow(equity, 1.0 / trading_years) - 1.0
-    float mean_r = sum_ret / float(total_bars)
-    float var_r  = sum_ret2 / float(total_bars) - mean_r * mean_r
-    float std_r  = math.sqrt(math.max(var_r, 0.0))
-    sharpe    := safe_div(mean_r, std_r, 0.0) * math.sqrt(252.0)
-    win_rate  := safe_div(float(win_bars), float(total_bars), 0.0)
-
-var table perf_table = table.new(
-     position.top_right, columns=2, rows=8,
-     bgcolor      = color.new(color.black, 70),
-     border_color = color.new(color.white, 50),
-     border_width = 1,
-     frame_color  = color.new(color.white, 30),
-     frame_width  = 1)
-
-if show_table and barstate.islast
-    table.cell(perf_table, 0, 0, "📊 STRATEGY METRICS",
-         text_color  = color.white,
-         text_size   = size.small,
-         bgcolor     = color.new(color.navy, 40),
-         text_halign = text.align_center)
-    table.cell(perf_table, 1, 0, regime_label + " Regime",
-         text_color  = consensus_color,
-         text_size   = size.small,
-         bgcolor     = color.new(color.navy, 40),
-         text_halign = text.align_center)
-
-    table.cell(perf_table, 0, 1, "CAGR",
-         text_color = color.silver, text_size = size.small)
-    table.cell(perf_table, 1, 1,
-         str.tostring(math.round(cagr * 100.0, 2)) + "%",
-         text_color = cagr >= 0.0 ? color.lime : color.red,
-         text_size  = size.small)
-
-    table.cell(perf_table, 0, 2, "Sharpe",
-         text_color = color.silver, text_size = size.small)
-    table.cell(perf_table, 1, 2,
-         str.tostring(math.round(sharpe, 2)),
-         text_color = sharpe >= 1.0 ? color.lime : sharpe >= 0.0 ? color.yellow : color.red,
-         text_size  = size.small)
-
-    table.cell(perf_table, 0, 3, "Max Drawdown",
-         text_color = color.silver, text_size = size.small)
-    table.cell(perf_table, 1, 3,
-         str.tostring(math.round(max_dd * 100.0, 2)) + "%",
-         text_color = color.red, text_size = size.small)
-
-    table.cell(perf_table, 0, 4, "Win Rate",
-         text_color = color.silver, text_size = size.small)
-    table.cell(perf_table, 1, 4,
-         str.tostring(math.round(win_rate * 100.0, 1)) + "%",
-         text_color = win_rate >= 0.5 ? color.lime : color.orange,
-         text_size  = size.small)
-
-    table.cell(perf_table, 0, 5, "Equity (×1)",
-         text_color = color.silver, text_size = size.small)
-    table.cell(perf_table, 1, 5,
-         str.tostring(math.round(equity, 3)),
-         text_color = equity >= 1.0 ? color.lime : color.red,
-         text_size  = size.small)
-
-    string active_strats =
-         (ma_signal  == 1 ? "MA "  : "") +
-         (mr_signal  == 1 ? "MR "  : "") +
-         (rsi_signal == 1 ? "RSI " : "") +
-         (bb_signal  == 1 ? "BB"   : "")
-    table.cell(perf_table, 0, 6, "Active Signals",
-         text_color = color.silver, text_size = size.small)
-    table.cell(perf_table, 1, 6,
-         str.length(active_strats) == 0 ? "NONE (Flat)" : active_strats,
-         text_color = color.aqua, text_size = size.small)
-
-    table.cell(perf_table, 0, 7, "Consensus",
-         text_color = color.silver, text_size = size.small)
-    table.cell(perf_table, 1, 7, consensus_str,
-         text_color = consensus_color, text_size = size.small)
-
-
-// ============================================================
-// ── RSI & Z-SCORE INFO BOX ───────────────────────────────────
-// Shows RSI and Z-Score states in a compact info panel
-// ============================================================
-
-// Calculate display states outside the if block (v6 requirement)
-string rsi_state = rsi_value < float(rsi_oversold) ? "OVERSOLD" : rsi_value > float(rsi_overbought) ? "OVERBOUGHT" : "NEUTRAL"
-color  rsi_color = rsi_value < float(rsi_oversold) ? color.lime : rsi_value > float(rsi_overbought) ? color.red : color.orange
-
-string z_state = zscore < -2.0 ? "EXT OVERSOLD" : zscore < -1.0 ? "OVERSOLD" : zscore > 2.0 ? "EXT OVERBOUGHT" : zscore > 1.0 ? "OVERBOUGHT" : "NORMAL"
-color  z_color = zscore < -1.0 ? color.lime : zscore > 1.0 ? color.red : color.orange
-
-bool rsi_in_long = rsi_signal == 1
-bool z_in_long   = mr_signal  == 1
-string sig_str = rsi_in_long and z_in_long ? "RSI + Z LONG" : rsi_in_long ? "RSI LONG" : z_in_long ? "Z LONG" : "FLAT"
-color  sig_col = (rsi_in_long or z_in_long) ? color.lime : color.gray
-
-var table rsi_table = table.new(
-     position.bottom_right, columns=2, rows=4,
-     bgcolor      = color.new(color.black, 75),
-     border_color = color.new(color.white, 60),
-     border_width = 1,
-     frame_color  = color.new(color.white, 40),
-     frame_width  = 1)
-
-if show_rsi_panel and barstate.islast
-    table.cell(rsi_table, 0, 0, "Indicator",
-         text_color  = color.white,
-         text_size   = size.tiny,
-         bgcolor     = color.new(color.navy, 40),
-         text_halign = text.align_center)
-    table.cell(rsi_table, 1, 0, "Value / State",
-         text_color  = color.white,
-         text_size   = size.tiny,
-         bgcolor     = color.new(color.navy, 40),
-         text_halign = text.align_center)
-
-    table.cell(rsi_table, 0, 1, "RSI (" + str.tostring(rsi_period) + ")",
-         text_color = color.silver, text_size = size.tiny)
-    table.cell(rsi_table, 1, 1,
-         str.tostring(math.round(rsi_value, 1)) + "  " + rsi_state,
-         text_color = rsi_color, text_size = size.tiny)
-
-    table.cell(rsi_table, 0, 2, "Z-Score (" + str.tostring(zscore_window) + ")",
-         text_color = color.silver, text_size = size.tiny)
-    table.cell(rsi_table, 1, 2,
-         str.tostring(math.round(zscore, 2)) + "  " + z_state,
-         text_color = z_color, text_size = size.tiny)
-
-    table.cell(rsi_table, 0, 3, "Active Signal",
-         text_color = color.silver, text_size = size.tiny)
-    table.cell(rsi_table, 1, 3, sig_str,
-         text_color = sig_col, text_size = size.tiny)
-
-
-// ============================================================
-// ── DRAWDOWN ALERT ───────────────────────────────────────────
-// ============================================================
-
-float current_dd          = (equity - peak_equity) / peak_equity
-float drawdown_alert_level = drawdown_alert_pct / 100.0
-
-alertcondition(
-     current_dd <= -drawdown_alert_level,
-     title   = "Drawdown Alert",
-     message = "⚠️ DRAWDOWN ALERT: {{ticker}} @ {{close}} — Strategy drawdown exceeded threshold. Check chart for current drawdown %. Consider reducing position size.")
-
-if show_dd_labels and current_dd <= -drawdown_alert_level
+if barstate.islast
     label.new(
-         bar_index,
-         low * 0.99,
-         text      = "⚠️ DD: " + str.tostring(math.round(current_dd * 100.0, 1)) + "%",
-         style     = label.style_label_up,
-         color     = color.new(color.red, 20),
-         textcolor = color.white,
-         size      = size.tiny)
+         bar_index, high * 1.02,
+         text      = '⬤ ' + consensus_str + '\nRegime: ' + regime,
+         style     = label.style_label_left,
+         color     = color.new(color.black, 80),
+         textcolor = consensus_color,
+         size      = size.normal)
 
+// =================================
+// PROFESSIONAL STATISTICS PANEL (MSTS-style)
+// =================================
 
-// ============================================================
-// ── ALERT CONDITIONS ─────────────────────────────────────────
-// ============================================================
+pos_status = strategy.position_size > 0 ? 'LONG' : strategy.position_size < 0 ? 'SHORT' : 'FLAT'
+pos_color  = strategy.position_size > 0 ? color.green : strategy.position_size < 0 ? color.red : color.gray
 
-alertcondition(combined_long,
-     title   = "BUY Signal",
-     message = "🟢 BUY — {{ticker}} @ {{close}} ({{time}}) — Check chart for active regime and strategy details.")
-alertcondition(combined_short,
-     title   = "SELL Signal",
-     message = "🔴 SELL — {{ticker}} @ {{close}} ({{time}}) — Check chart for active regime and strategy details.")
-alertcondition(ma_buy,
-     title   = "MA Crossover BUY",
-     message = "MA BUY — {{ticker}} @ {{close}} — Fast MA crossed above Slow MA.")
-alertcondition(ma_sell,
-     title   = "MA Crossover SELL",
-     message = "MA SELL — {{ticker}} @ {{close}} — Fast MA crossed below Slow MA.")
-alertcondition(rsi_buy,
-     title   = "RSI Oversold BUY",
-     message = "RSI BUY — {{ticker}} @ {{close}} — RSI entered oversold territory. Check chart for current RSI value.")
-alertcondition(rsi_sell,
-     title   = "RSI Overbought SELL",
-     message = "RSI SELL — {{ticker}} @ {{close}} — RSI entered overbought territory. Check chart for current RSI value.")
-alertcondition(bb_buy,
-     title   = "BB Lower-Band BUY",
-     message = "BB BUY — {{ticker}} @ {{close}} — Price touched lower Bollinger Band.")
-alertcondition(bb_sell,
-     title   = "BB Mid-Band SELL",
-     message = "BB SELL — {{ticker}} @ {{close}} — Price crossed above Bollinger mid-band.")
-alertcondition(mr_buy,
-     title   = "Z-Score MR BUY",
-     message = "MR BUY — {{ticker}} @ {{close}} — Z-Score crossed below entry threshold. Check chart for current Z value.")
-alertcondition(mr_sell,
-     title   = "Z-Score MR SELL",
-     message = "MR SELL — {{ticker}} @ {{close}} — Z-Score crossed above exit threshold. Check chart for current Z value.")
+if show_stats
+    var table stats = table.new(position.top_right, 2, 10, 
+                                bgcolor=color.new(color.black, 70),
+                                border_width=1,
+                                border_color=color.new(color.white, 50),
+                                frame_width=1,
+                                frame_color=color.new(color.white, 30))
+    
+    total_trades  = strategy.closedtrades
+    win_trades    = strategy.wintrades
+    win_rate      = total_trades > 0 ? win_trades / total_trades * 100 : 0
+    profit_factor = strategy.grossprofit / math.max(strategy.grossloss, 1)
 
+    sharpe_ratio = (momentum_score - vol_score)
 
-// ============================================================
-// END OF SCRIPT — All features combined in one file
-// ============================================================
+    regime_color = regime == 'Trending' ? color.new(color.green,  0) :
+                   regime == 'Range'    ? color.new(color.orange, 0) :
+                   regime == 'Volatile' ? color.new(color.red,    0) : color.gray
+    wr_color  = win_rate >= 60 ? color.lime   : win_rate >= 50 ? color.yellow : color.red
+    pf_color  = profit_factor >= 2.0 ? color.lime : profit_factor >= 1.5 ? color.yellow : color.red
+    np_color  = strategy.netprofit > 0 ? color.lime : color.red
+    sharpe_color = sharpe_ratio >= 1.0 ? color.lime : sharpe_ratio >= 0.0 ? color.yellow : color.red
+
+    table.cell(stats, 0, 0, '📊 STRATEGY METRICS', 
+              text_color=color.white, 
+              text_size=size.small,
+              text_halign=text.align_center,
+              bgcolor=color.new(color.navy, 40))
+    table.cell(stats, 1, 0, regime + ' Regime', 
+              text_color=regime_color, 
+              text_size=size.small,
+              text_halign=text.align_center,
+              bgcolor=color.new(color.navy, 40))
+
+    table.cell(stats, 0, 1, 'Win Rate', text_color=color.silver, text_size=size.small)
+    table.cell(stats, 1, 1, str.format('{0,number,#.#}%', win_rate), text_color=wr_color, text_size=size.small)
+
+    table.cell(stats, 0, 2, 'Profit Factor', text_color=color.silver, text_size=size.small)
+    table.cell(stats, 1, 2, str.format('{0,number,#.##}', profit_factor), text_color=pf_color, text_size=size.small)
+
+    table.cell(stats, 0, 3, 'Trades', text_color=color.silver, text_size=size.small)
+    table.cell(stats, 1, 3, str.tostring(total_trades), text_color=color.white, text_size=size.small)
+
+    table.cell(stats, 0, 4, 'Net Profit', text_color=color.silver, text_size=size.small)
+    table.cell(stats, 1, 4, str.format('{0,number,#.##}%', strategy.netprofit), text_color=np_color, text_size=size.small)
+
+    table.cell(stats, 0, 5, 'Max DD', text_color=color.silver, text_size=size.small)
+    table.cell(stats, 1, 5, str.format('{0,number,#.##}%', strategy.max_drawdown), text_color=color.red, text_size=size.small)
+
+    // ⭐ NEW SHARPE RATIO ROW ⭐
+    table.cell(stats, 0, 6, 'Sharpe', text_color=color.silver, text_size=size.small)
+    table.cell(stats, 1, 6, str.format('{0,number,#.##}', sharpe_ratio), text_color=sharpe_color, text_size=size.small)
+
+    table.cell(stats, 0, 7, '---------------', text_color=color.new(color.gray, 70), text_size=size.tiny)
+    table.cell(stats, 1, 7, '---------------', text_color=color.new(color.gray, 70), text_size=size.tiny)
+
+    table.cell(stats, 0, 8, 'Position', text_color=color.silver, text_size=size.small)
+    table.cell(stats, 1, 8, pos_status, text_color=pos_color, text_size=size.small)
+
+    table.cell(stats, 0, 9, 'Consensus', text_color=color.silver, text_size=size.small)
+    table.cell(stats, 1, 9, consensus_str, text_color=consensus_color, text_size=size.small)
+
+// =================================
+// ALERTS
+// =================================
+
+alertcondition(longCondition, 
+              title='BUY Signal', 
+              message='BUY Signal Generated')
+
+alertcondition(shortCondition, 
+              title='SELL Signal', 
+              message='SELL Signal Generated')
+
+alertcondition(regime == 'Volatile', 
+              title='High Volatility Alert', 
+              message='HIGH VOLATILITY - Reduce position size')
