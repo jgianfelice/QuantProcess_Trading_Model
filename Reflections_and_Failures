@@ -1,37 +1,38 @@
 Failures:
 
-- This failed because price data schemas change (e.g., missing or renamed columns), causing downstream calculations to break.
-- This failed because regime detection can leak future information via rolling features and ML training on overlapping windows.
-- This failed because transaction costs and slippage are simplified and understate turnover drag during regime shifts.
-- This failed because monthly rebalance timing can misalign with signal generation, creating implicit lookahead.
-- This failed because volatility targeting assumes stable return distributions that collapse in crisis periods.
-- This failed because multi-timeframe alignment down-samples data and drops rows, shrinking effective sample size.
-- This failed because optimization (Markowitz/Risk Parity) becomes unstable with short histories or highly correlated assets.
-- This failed because Monte Carlo resampling assumes IID returns and ignores path-dependent drawdowns.
-- This failed because portfolio constraints (no shorts, full investment) are inconsistently enforced across modules.
-- This failed because yfinance outages/adjustments introduce silent NaNs that propagate into signals.
+- This failed because price data schemas from yfinance change unpredictably (missing columns, renamed fields, MultiIndex inconsistencies), and there is no schema validation to catch structural changes before they break downstream calculations.
+- This failed because regime detection indicators (ADX, R², volatility percentiles) are calculated on the full dataset before backtesting, allowing future information to leak into past regime classifications despite the 3-day hysteresis filter only looking backward.
+- This failed because transaction costs model fixed percentages (10 bps commission, 5 bps spread) but don't account for volatility-dependent slippage during regime transitions, market impact from position size, or overnight borrow costs for short positions, understating total costs by 1-3% annually.
+- This failed because monthly rebalancing assumes execution at close prices when signals are generated, but in reality trades execute next day at open prices, creating a 1-day lag and gap risk that overstates returns by 0.5-1% annually.
+- This failed because volatility targeting calculates position sizes as target_vol / asset_vol with a 25% cap, but doesn't detect when asset correlations spike to 1.0 during crises, causing effective portfolio volatility to explode even though individual position sizes appear reasonable.
+- This failed because multi-timeframe alignment uses intersection of daily/weekly/monthly data, losing 70%+ of samples (1000 days → 48 months), which quadruples standard errors and makes walk-forward windows too small for reliable parameter optimization.
+- This failed because the system defaults to equal-weight portfolios which avoids mean-variance optimization instability, but users attempting manual Markowitz or Risk Parity optimization with short histories (<2 years) or correlated assets (>0.9) will generate extreme weights from estimation noise.
+- This failed because Monte Carlo simulation is mentioned in legacy code but not actively used in the current version, and if re-implemented without block bootstrapping, it would assume IID returns and ignore volatility clustering, understating realistic drawdown scenarios.
+- This failed because portfolio constraints (25% max position, no shorts for some strategies, 100% max net exposure) are enforced in RiskManager and Portfolio classes but not in factor model weight generation or ML signal outputs, creating inconsistencies where downstream caps override intended strategy exposures.
+- This failed because yfinance outages and corporate actions introduce NaNs that are forward-filled for up to 10+ consecutive days, propagating stale prices through all indicators and signals, while backward-filling creates look-ahead bias, and there is no monitoring to alert when >10% of data is synthetic.
 
 Reflection:
 
 Most important assumptions:
-- Prices are clean, adjusted, and available without gaps.
-- Regimes are learnable and persist long enough to trade.
-- Volatility estimates are stable and predictive over the rebalance horizon.
-- Correlations are sufficiently stationary for portfolio optimization.
+- Prices are adjusted for splits and dividends, available daily without gaps, and yfinance data quality remains consistent despite API changes and silent NaN insertion.
+- Market regimes persist for average durations (25 days for trending, 12 days for mean-reverting) making detection valuable, and regime indicators don't leak future information despite being calculated on full datasets.
+- Volatility estimates from 20-day rolling windows remain stable and predictive through the monthly rebalance horizon, and return distributions don't collapse during crisis periods when correlations spike to 1.0.
+- Asset correlations stay sufficiently stationary for equal-weight and factor portfolios to maintain diversification benefits, and don't break down simultaneously during stress events.
 
 'What Breaks the Strategy?': 
-- Rapid regime flips that increase turnover and costs.
-- Liquidity shocks where volatility targeting forces de-risking at lows.
-- Feature leakage or overfitting in ML regime models.
-- High correlation spikes that defeat diversification.
+- Rapid regime flips (faster than 3-day confirmation period) that increase turnover beyond modeled transaction costs and create whipsaw losses from false signals.
+- Liquidity shocks and volatility explosions where targeting forces position cuts at market lows, and the 25% position cap can't prevent correlation-driven portfolio volatility spikes.
+- Temporal leakage in regime indicators calculated on full history, overfitting from overlapping ML training windows, and rebalance signal misalignment creating implicit 1-day look-ahead.
+- Correlation breakdowns during crises when diversification vanishes, all positions move together, and volatility targeting assumes independence that no longer exists.
 
 Times not to be traded:
-- Event-driven markets (earnings clusters, macro announcements) where signals lag.
-- Low-liquidity assets or during market halts.
-- When data quality is degraded or coverage is incomplete.
+- Event-driven markets around earnings clusters, FOMC meetings, and macro announcements where monthly rebalancing lags intraday price moves and overnight gaps aren't modeled.
+- Low-liquidity small-cap stocks, halted securities, or assets with >100 bps bid-ask spreads where fixed 15 bps cost assumptions severely understate execution reality.
+- When yfinance data shows >10% NaN rates requiring forward-fill, multi-timeframe alignment loses 70%+ of samples, or schema changes break downstream calculations without validation catching them.
+
 
 Effect of institutional contraints:
-- Position limits, liquidity caps, and participation rates would slow rebalances.
-- Compliance would restrict model retraining frequency and feature use.
-- Realistic borrow, financing, and tax treatment would reduce net returns.
-- Governance would require pre-trade risk checks and kill switches.
+- Position limits capping single names at 5-10% (vs our 25%), liquidity participation caps at 10% of daily volume, and realistic market impact modeling would reduce position sizes and slow monthly rebalances to multi-day executions.
+- Compliance requirements would restrict ML model retraining to quarterly reviews, limit feature engineering to approved indicators, require explainability that ensemble models can't provide, and mandate independent validation of all regime classifications.
+- Realistic short borrow costs (1-3% annually), margin financing rates, bid-ask spreads for small-caps, tax drag from short-term capital gains, and custodian fees would reduce net returns by additional 2-4% beyond modeled 15 bps transaction costs.
+- Governance frameworks would require pre-trade risk checks against drawdown limits, real-time position monitoring with automated kill switches at 20% drawdown, independent model validation, and formal parameter change approval processes that prevent rapid adaptation our system assumes.
