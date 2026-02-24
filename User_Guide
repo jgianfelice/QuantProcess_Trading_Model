@@ -1,0 +1,16 @@
+Python Version - Recommended Practices:
+- Always check regime before trading 
+- Use walk-forward analysis to validate strategies and avoid overfitting 
+- Include transaction costs in all backtests 
+- Size positions by volatility, not equal weight 
+- Use trailing stops to lock in profits 
+- Monitor drawdown continuously and respect limits 
+- Rebalance factor portfolios monthly, not daily 
+- Combine multiple factors for diversification
+- Compare to benchmarks (buy-and-hold, equal-weight)
+- Document all parameter changes for reproducibility 
+
+Pine Version - Recommended Practices:
+- Save code as new script
+- Test different timeframes to ensure functioning code 
+- Disable the following style options: Pane Labels, Trades on chart, Values in status line, Inputs in status line
