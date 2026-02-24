@@ -1,5 +1,5 @@
 # QuantProcess_Trading_Model
-Complete trading model created by Justin Gianfelice. Output and indicators received are based on stock ticker input and choice of trading strategy. Two versions are attached, one being the original Python code and the second being an optimized version in Pine script, ready to be implemented into a trading facilitator such as TradingView. 
+Complete trading model created by Justin Gianfelice. Output and indicators received are based on stock ticker input and choice of trading strategy. Two versions are attached, one being the original Python code and the second being an optimized version in Pine script, ready to be implemented into a trading facilitator such as TradingView. The Python version emphasizes serves as a professional-grade research and analysis tool, whereas the Pine script simplifies these strategies into one clean, implementable strategy.
 
 Core Capabilities
 - Market Regime Detection
