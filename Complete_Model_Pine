@@ -8,7 +8,7 @@ strategy('Institutional Quant Strategy',
          max_bars_back=500)
 
 // ============================================================================
-// PROFESSIONAL CLEAN VERSION - OPTIMIZED FOR READABILITY
+// QUANTPROCESS TRADING MODEL - OPTIMIZED FOR TRADINGVIEW
 // ============================================================================
 
 // =================================
